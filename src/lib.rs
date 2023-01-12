@@ -40,11 +40,45 @@ pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
     final_sql
 }
 
+/// Given a database pool, a SQL string with placeholders in Sqlite or PostgreSQL syntax,
+/// and a vector with the parameters corresponding to the placeholders, interpolate the parameters
+/// into the given SQL string and return the interpolated string.
+pub fn interpolate_sql(pool: &AnyPool, sql: &str, params: &Vec<String>) -> String {
+    let mut final_sql = String::from("");
+    let mut saved_start = 0;
+
+    let rx;
+    if pool.any_kind() == AnyKind::Postgres {
+        rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B[$]\d+\b"#)
+            .unwrap();
+    } else {
+        rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B[?]\B"#).unwrap();
+    }
+
+    let mut param_index = 0;
+    for m in rx.find_iter(sql) {
+        let this_match = &sql[m.start()..m.end()];
+        final_sql.push_str(&sql[saved_start..m.start()]);
+        if !((this_match.starts_with("\"") && this_match.ends_with("\""))
+            || (this_match.starts_with("'") && this_match.ends_with("'")))
+        {
+            let param = params.get(param_index).unwrap();
+            final_sql.push_str(&format!("'{}'", param));
+            param_index += 1;
+        } else {
+            final_sql.push_str(&format!("{}", this_match));
+        }
+        saved_start = m.start() + this_match.len();
+    }
+    final_sql.push_str(&sql[saved_start..]);
+    final_sql
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // TODO: Add an actual unit test here.
+    // TODO: Add some actual unit tests here.
     #[test]
     fn sqlite_syntax() {
         assert_eq!(true, true)
