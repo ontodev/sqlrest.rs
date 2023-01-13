@@ -40,19 +40,32 @@ pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
     final_sql
 }
 
-/// Given a database pool, a SQL string with placeholders in Sqlite or PostgreSQL syntax,
-/// and a vector with the parameters corresponding to the placeholders, interpolate the parameters
-/// into the given SQL string and return the interpolated string.
-pub fn interpolate_sql(pool: &AnyPool, sql: &str, params: &Vec<String>) -> String {
+/// Given a database pool, a SQL string with placeholders representing bound parameters, a vector
+/// with the parameters corresponding to each placeholder, and (optionally) the string (which must
+/// be a word in the regex-sense) to use to identify the placeholders in the SQL string, combine
+/// the information into an interpolated string that is then returned. If ~placeholder_str~ is not
+/// None, then use it to explicitly identify placeholders in ~sql~. Otherwise, use ~pool~ to
+/// determine the placeholder syntax to use for the specific kind of database the SQL is intended
+/// for. VALVE currently supports:
+/// (1) PostgreSQL, which uses numbered variables $N, e.g., SELECT 1 FROM foo WHERE bar IN ($1, $2)
+/// (2) SQLite, which uses question marks, e.g., SELECT 1 FROM foo WHERE bar IN (?, ?)
+pub fn interpolate_sql(
+    pool: &AnyPool,
+    sql: &str,
+    params: &Vec<String>,
+    placeholder_str: Option<&str>,
+) -> String {
     let mut final_sql = String::from("");
     let mut saved_start = 0;
 
+    let quotes = r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")"#;
     let rx;
-    if pool.any_kind() == AnyKind::Postgres {
-        rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B[$]\d+\b"#)
-            .unwrap();
+    if let Some(s) = placeholder_str {
+        rx = Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s)).unwrap();
+    } else if pool.any_kind() == AnyKind::Postgres {
+        rx = Regex::new(&format!(r#"{}|\B[$]\d+\b"#, quotes)).unwrap();
     } else {
-        rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B[?]\B"#).unwrap();
+        rx = Regex::new(&format!(r#"{}|\B[?]\B"#, quotes)).unwrap();
     }
 
     let mut param_index = 0;
