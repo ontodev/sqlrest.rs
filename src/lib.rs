@@ -187,6 +187,10 @@ impl Select {
     }
 
     pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
+        if self.table == "" {
+            return Err("Missing required field: table".to_string());
+        }
+
         let mut select_columns = vec![];
         if self.select.is_empty() {
             // We are forcing the user to supply his/her own quotes around table names and column
@@ -214,13 +218,13 @@ impl Select {
         } else {
             select_columns = self.select.clone();
         }
-        let select_clause = select_columns.join(", ");
 
-        let mut sql = String::from("");
-        if select_clause != "" && self.table != "" {
-            sql.push_str(&format!("SELECT {} FROM {}", select_clause, self.table));
+        if select_columns.is_empty() {
+            return Err(format!("Could not find any columns for table '{}'", self.table));
         }
 
+        let select_clause = select_columns.join(", ");
+        let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
         if !self.filters.is_empty() {
             let where_clause = match filters_to_sql(&self.filters, &pool) {
                 Err(err) => return Err(err),
@@ -637,7 +641,7 @@ mod tests {
         eprintln!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
         let mut select = Select::new();
-        eprintln!("NEW SELECT: '{}'", select.to_sql(&pg_pool).unwrap());
+        eprintln!("NEW SELECT: '{:?}'", select.to_sql(&pg_pool));
         select.limit(11);
         select.offset(50);
         select.table("\"table1\"".to_string());
