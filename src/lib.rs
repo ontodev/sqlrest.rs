@@ -9,6 +9,7 @@ use sqlx::{
 };
 use std::collections::HashMap;
 
+/// Representation of an operator of an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Operator {
     Equals,
@@ -24,6 +25,7 @@ pub enum Operator {
     In,
 }
 
+/// The direction of an ORDER BY clause in an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Direction {
     Ascending,
@@ -31,7 +33,8 @@ pub enum Direction {
 }
 
 impl Direction {
-    fn to_sql(&self) -> &str {
+    /// Converts a Direction enum to a SQL string.
+    pub fn to_sql(&self) -> &str {
         match self {
             Direction::Ascending => "ASC",
             Direction::Descending => "DESC",
@@ -39,6 +42,7 @@ impl Direction {
     }
 }
 
+/// Representation of a filter in an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Filter {
     lhs: String,
@@ -47,11 +51,15 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Clone the given filter.
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
     }
 
-    fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
+    /// Use the given database connection pool to convert the given filter into an SQL string
+    /// suitable to be used in a WHERE clause, using the syntax appropriate to the kind of database
+    /// represented by the pool. Currently supported databases are PostgreSQL and SQLite.
+    pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
         let not_a_string_err = format!("RHS of filter: {:?} is not a string.", self);
         let not_a_string_or_number_err =
             format!("RHS of filter: {:?} is not a string or a number.", self);
@@ -131,10 +139,31 @@ impl Filter {
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => {
                     let mut values = vec![];
-                    for option in options {
+                    let mut is_string_list = false;
+                    for (i, option) in options.iter().enumerate() {
                         match option {
-                            SerdeValue::String(s) => values.push(format!("{}", s)),
-                            SerdeValue::Number(n) => values.push(format!("{}", n)),
+                            SerdeValue::String(s) => {
+                                if i == 0 {
+                                    is_string_list = true;
+                                } else if !is_string_list {
+                                    return Err(format!(
+                                        "{:?} contains both text and numeric types.",
+                                        options
+                                    ));
+                                }
+                                values.push(format!("{}", s))
+                            }
+                            SerdeValue::Number(n) => {
+                                if i == 0 {
+                                    is_string_list = false;
+                                } else if is_string_list {
+                                    return Err(format!(
+                                        "{:?} contains both text and numeric types.",
+                                        options
+                                    ));
+                                }
+                                values.push(format!("{}", n))
+                            }
                             _ => {
                                 return Err(format!(
                                     "{:?} is not an array of strings or numbers.",
@@ -153,6 +182,8 @@ impl Filter {
     }
 }
 
+/// Given a list of filters and a database connection pool, convert each filter to an SQL string and
+/// join them together using the keyword AND.
 pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, String> {
     let mut parts: Vec<String> = vec![];
     for filter in filters {
@@ -165,6 +196,95 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
     Ok(parts.join(joiner))
 }
 
+/// A structure to represent an SQL select statement.
+/// Examples:
+/// ```rust,ignore
+/// // Initialise a new Select object using struct syntax:
+/// let select = Select {
+///     // When names require quotation marks (e.g. if they contain a space), then these must be
+///     // supplied by the user:
+///     table: String::from(r#""my table""#),
+///     // If the select field is empty, then the database will be queried when converting the
+///     // struct to SQL, so as to include all of the table's defined columns in the SELECT clause.
+///     select: vec![],
+///     filters: vec![],
+///     group_by: vec![],
+///     having: vec![],
+///     order_by: vec![],
+///     limit: Some(10),
+///     offset: None,
+/// };
+///
+/// let expected_sql = format!(
+///     r#"{} {}"#,
+///     r#"SELECT "my column 1", "my column 2", "my column 3", "my column 4""#,
+///     r#"FROM "my table" LIMIT 10"#
+/// );
+/// assert_eq!(select.to_sql(&postgresql_pool).unwrap(), expected_sql);
+/// assert_eq!(select.to_sql(&sqlite_pool).unwrap(), expected_sql);
+///
+/// // Initialise a new Select object by calling new() and then progressively add further
+/// // information.
+/// let mut select = Select::new();
+/// select.table(r#""a table name with spaces""#.to_string());
+/// select.select(vec!["foo".to_string(), r#""a column name with spaces""#.to_string()]);
+/// select.add_select("bar".to_string());
+/// select.add_select("COUNT(1)".to_string());
+/// select.filters(vec![Filter {
+///     lhs: String::from("foo"),
+///     operator: Operator::Is,
+///     rhs: SerdeValue::String("{foo}".to_string()),
+/// }]);
+/// select.add_filter(Filter {
+///     lhs: "bar".to_string(),
+///     operator: Operator::In,
+///     rhs: SerdeValue::Array(vec![
+///         SerdeValue::String("{val1}".to_string()),
+///         SerdeValue::String("{val2}".to_string()),
+///     ]),
+/// });
+/// select.order_by(vec![
+///     ("foo".to_string(), Direction::Ascending),
+///     ("bar".to_string(), Direction::Descending),
+/// ]);
+/// select.group_by(vec!["foo".to_string()]);
+/// select.add_group_by(r#""a column name with spaces""#.to_string());
+/// select.add_group_by("bar".to_string());
+/// select.having(vec![Filter {
+///     lhs: String::from("COUNT(1)"),
+///     operator: Operator::GreaterThan,
+///     rhs: SerdeValue::Number(SerdeNumber::from(1)),
+/// }]);
+/// select.limit(11);
+/// select.offset(50);
+/// assert_eq!(
+///     select.to_sql(&postgresql_pool).unwrap(),
+///     format!(
+///         "{} {} {} {} {} {} {}",
+///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+///         r#"FROM "a table name with spaces""#,
+///         r#"WHERE foo IS NOT DISTINCT FROM {foo} AND bar IN ({val1}, {val2})"#,
+///         r#"GROUP BY foo, "a column name with spaces", bar"#,
+///         r#"HAVING COUNT(1) > 1"#,
+///         r#"ORDER BY foo ASC, bar DESC"#,
+///         r#"LIMIT 11 OFFSET 50"#
+///     )
+/// );
+///
+/// assert_eq!(
+///     select.to_sql(&sqlite_pool).unwrap(),
+///     format!(
+///         "{} {} {} {} {} {} {}",
+///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+///         r#"FROM "a table name with spaces""#,
+///         r#"WHERE foo IS {foo} AND bar IN ({val1}, {val2})"#,
+///         r#"GROUP BY foo, "a column name with spaces", bar"#,
+///         r#"HAVING COUNT(1) > 1"#,
+///         r#"ORDER BY foo ASC, bar DESC"#,
+///         r#"LIMIT 11 OFFSET 50"#
+///     )
+/// );
+/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     table: String,
@@ -178,20 +298,28 @@ pub struct Select {
 }
 
 impl Select {
+    /// Create a new Select struct with private fields initialized to their default values.
     pub fn new() -> Select {
         Default::default()
     }
 
+    /// Clone the given Select struct.
     pub fn clone(select: &Select) -> Select {
         Select { ..select.clone() }
     }
 
+    /// Given a database connection pool, convert the given Select struct to an SQL statement,
+    /// using the syntax appropriate for the kind of database connected to by the pool. Currently
+    /// supported databases are PostgreSQL and SQLite. If the given Select struct has an empty
+    /// `select` field, then the columns of the given table are looked up in the database and all
+    /// of them are explicitly added to the SELECT statement generated.
     pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
         if self.table == "" {
-            return Err("Missing required field: table".to_string());
+            return Err("Cannot convert Select to SQL: Missing required field: table".to_string());
         }
 
         let mut select_columns = vec![];
+        // If `self.select` is empty, look up the columns corresponding to the table in the db:
         if self.select.is_empty() {
             // We are forcing the user to supply his/her own quotes around table names and column
             // names, etc. Because of this we need to unquote the table name for the metadata query
@@ -213,7 +341,7 @@ impl Select {
             let rows = block_on(query.fetch_all(pool)).unwrap();
             for row in &rows {
                 let cname: &str = row.get("name");
-                select_columns.push(String::from(cname));
+                select_columns.push(format!(r#""{}""#, cname));
             }
         } else {
             select_columns = self.select.clone();
@@ -228,23 +356,20 @@ impl Select {
         if !self.filters.is_empty() {
             let where_clause = match filters_to_sql(&self.filters, &pool) {
                 Err(err) => return Err(err),
-                Ok(r) => r,
+                Ok(s) => s,
             };
             sql.push_str(&format!(" WHERE {}", where_clause));
         }
-
         if !self.group_by.is_empty() {
             sql.push_str(&format!(" GROUP BY {}", self.group_by.join(", ")));
         }
-
         if !self.having.is_empty() {
             let having_clause = match filters_to_sql(&self.having, &pool) {
                 Err(err) => return Err(err),
-                Ok(r) => r,
+                Ok(s) => s,
             };
             sql.push_str(&format!(" HAVING {}", having_clause));
         }
-
         if !self.order_by.is_empty() {
             sql.push_str(" ORDER BY ");
             let order_strings = self
@@ -254,95 +379,106 @@ impl Select {
                 .collect::<Vec<String>>();
             sql.push_str(&format!("{}", order_strings.join(", ")));
         }
-
         if let Some(limit) = self.limit {
             sql.push_str(&format!(" LIMIT {}", limit));
         }
-
         if let Some(offset) = self.offset {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
-
         Ok(sql)
     }
 
+    /// Given a table name, set `self.table` to that name.
     pub fn table<S: Into<String>>(&mut self, table: S) -> &mut Select {
         self.table = table.into();
         self
     }
 
+    /// Given a vector of column names, replace the current contents of `self.select` with the
+    /// contents of the given vector.
     pub fn select<S: Into<String>>(&mut self, select: Vec<S>) -> &mut Select {
+        self.select.clear();
         for s in select {
             self.select.push(s.into());
         }
         self
     }
 
+    /// Given a column name, add it to the vector, `self.select`.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
         self.select.push(select.into());
         self
     }
 
+    /// Given a vector of filters, replace the current contents of `self.filters` with the contents
+    /// of the given vector.
     pub fn filters<F: Into<Filter>>(&mut self, filters: Vec<F>) -> &mut Select {
+        self.filters.clear();
         for f in filters {
             self.filters.push(f.into());
         }
         self
     }
 
+    /// Given a filter, add it to the vector, `self.filters`.
     pub fn add_filter<F: Into<Filter>>(&mut self, filter: F) -> &mut Select {
         self.filters.push(filter.into());
         self
     }
 
+    /// Given a vector of filters, replace the current contents of `self.having` with the contents
+    /// of the given vector.
     pub fn having<F: Into<Filter>>(&mut self, filters: Vec<F>) -> &mut Select {
+        self.having.clear();
         for f in filters {
             self.having.push(f.into());
         }
         self
     }
 
+    /// Given a filter, add it to the vector, `self.having`.
     pub fn add_having<F: Into<Filter>>(&mut self, filter: F) -> &mut Select {
         self.having.push(filter.into());
         self
     }
 
+    /// Given a vector of column names, replace the current contents of `self.group_by` with the
+    /// contents of the given vector.
     pub fn group_by<S: Into<String>>(&mut self, group_by: Vec<S>) -> &mut Select {
+        self.group_by.clear();
         for s in group_by {
             self.group_by.push(s.into());
         }
         self
     }
 
+    /// Given a column name, add it to the vector, `self.group_by`.
     pub fn add_group_by<S: Into<String>>(&mut self, group_by: S) -> &mut Select {
         self.group_by.push(group_by.into());
         self
     }
 
+    /// Given a vector of column names, replace the current contents of `self.order_by` with the
+    /// contents of the given vector.
     pub fn order_by<S: Into<String>>(&mut self, order_by: Vec<(S, Direction)>) -> &mut Select {
+        self.order_by.clear();
         for (s, d) in order_by {
             self.order_by.push((s.into(), d));
         }
         self
     }
 
+    /// Given an unsigned integer `limit`, set `self.limit` to the value of `limit`.
     pub fn limit(&mut self, limit: usize) -> &mut Select {
         self.limit = Some(limit);
         self
     }
 
+    /// Given an unsigned integer `offset`, set `self.offset` to the value of `offset`.
     pub fn offset(&mut self, offset: usize) -> &mut Select {
         self.offset = Some(offset);
         self
     }
-}
-
-/// Enum used to hold a parameter value, which can be a string or an integer, for binding
-/// to placeholders in SQL statements.
-#[derive(Debug, Clone)]
-pub enum SqlParam {
-    SignedInt(i64),
-    String(String),
 }
 
 /// Given a database pool and a SQL string containing a number of placeholders, `{key}`, where `key`
@@ -359,8 +495,8 @@ pub enum SqlParam {
 pub fn bind_sql<'a>(
     pool: &AnyPool,
     sql: &str,
-    param_map: &'a HashMap<&str, SqlParam>,
-) -> Result<(String, Vec<&'a SqlParam>), String> {
+    param_map: &'a HashMap<&str, SerdeValue>,
+) -> Result<(String, Vec<&'a SerdeValue>), String> {
     // This regex will find quoted strings as well as variables of the form `{key}` where `key` is
     // a token consisting of word characters and/or underscores:
     let rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B\{[\w_]+\}\B"#)
@@ -454,7 +590,7 @@ pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
 pub fn interpolate_sql(
     pool: &AnyPool,
     sql: &str,
-    params: &Vec<&SqlParam>,
+    params: &Vec<&SerdeValue>,
     placeholder_str: Option<&str>,
 ) -> Result<String, String> {
     let mut final_sql = String::from("");
@@ -482,8 +618,9 @@ pub fn interpolate_sql(
                 None => return Err(format!("No parameter at index {}", param_index)),
                 Some(param) => {
                     match param {
-                        SqlParam::String(param) => final_sql.push_str(&format!("'{}'", param)),
-                        SqlParam::SignedInt(param) => final_sql.push_str(&format!("{}", param)),
+                        SerdeValue::String(param) => final_sql.push_str(&format!("'{}'", param)),
+                        SerdeValue::Number(param) => final_sql.push_str(&format!("{}", param)),
+                        _ => return Err(format!("{} is not a string or a number.", param)),
                     };
                 }
             };
@@ -529,15 +666,16 @@ mod tests {
                  AND "col2" = {column}
             "#};
         let mut test_params = HashMap::new();
-        test_params.insert("table", SqlParam::String("foo".to_string()));
-        test_params.insert("row_num", SqlParam::SignedInt(1));
-        test_params.insert("column", SqlParam::String("bar".to_string()));
+        test_params.insert("table", SerdeValue::String("foo".to_string()));
+        test_params.insert("row_num", SerdeValue::Number(SerdeNumber::from(1)));
+        test_params.insert("column", SerdeValue::String("bar".to_string()));
         let (test_sql, test_params) = bind_sql(pool, &test_sql, &test_params).unwrap();
         let mut test_query = sqlx_query(&test_sql);
         for param in &test_params {
             match param {
-                SqlParam::String(s) => test_query = test_query.bind(s),
-                SqlParam::SignedInt(n) => test_query = test_query.bind(n),
+                SerdeValue::String(s) => test_query = test_query.bind(s),
+                SerdeValue::Number(n) => test_query = test_query.bind(n.as_i64()),
+                _ => panic!("{} is not a string or a number.", param),
             };
         }
 
@@ -611,23 +749,46 @@ mod tests {
     fn select() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pg_pool =
+        let postgresql_pool =
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
                 .unwrap();
 
-        let sq_connection_options = AnyConnectOptions::from_str(
-            "sqlite:///home/mike/Knocean/ontodev_demo/valve.rs/build/valve.db?mode=ro",
-        )
-        .unwrap();
-        let sq_pool =
+        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
+        let sqlite_pool =
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
                 .unwrap();
 
-        // TODO: Clean up below.
+        let drop_table1 = "DROP TABLE IF EXISTS my_table";
+        let create_table1 = r#"CREATE TABLE "my_table" (
+                                 "row_number" BIGINT,
+                                 "prefix" TEXT,
+                                 "base" TEXT,
+                                 "ontology IRI" TEXT,
+                                 "version IRI" TEXT
+                               )"#;
+        let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
+        let create_table2 = r#"CREATE TABLE "a table name with spaces" (
+                                 "foo" TEXT,
+                                 "a column name with spaces" TEXT,
+                                 "bar" TEXT
+                               )"#;
+
+        for pool in vec![&sqlite_pool, &postgresql_pool] {
+            for sql in vec![drop_table1, create_table1, drop_table2, create_table2] {
+                let query = sqlx_query(sql);
+                block_on(query.execute(pool)).unwrap();
+            }
+        }
 
         let select = Select {
-            table: String::from("\"table1\""),
-            select: vec![],
+            table: String::from("my_table"),
+            select: vec![
+                "row_number".to_string(),
+                "prefix".to_string(),
+                "base".to_string(),
+                r#""ontology IRI""#.to_string(),
+                r#""version IRI""#.to_string(),
+            ],
             filters: vec![],
             group_by: vec![],
             having: vec![],
@@ -635,63 +796,151 @@ mod tests {
             limit: Some(10),
             offset: None,
         };
-        eprintln!("{}", select.to_sql(&pg_pool).unwrap());
-        eprintln!("{}", select.to_sql(&sq_pool).unwrap());
-
-        eprintln!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+        let expected_sql = format!(
+            r#"{} {}"#,
+            r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
+            "FROM my_table LIMIT 10"
+        );
+        assert_eq!(select.to_sql(&postgresql_pool).unwrap(), expected_sql);
+        assert_eq!(select.to_sql(&sqlite_pool).unwrap(), expected_sql);
 
         let mut select = Select::new();
-        eprintln!("NEW SELECT: '{:?}'", select.to_sql(&pg_pool));
-        select.limit(11);
-        select.offset(50);
-        select.table("\"table1\"".to_string());
-        select.select(vec!["\"prefix\"".to_string(), "\"base\"".to_string()]);
-        select.add_select("\"ontology IRI\"".to_string());
+        select.table(r#""a table name with spaces""#.to_string());
+        select.select(vec!["foo".to_string(), r#""a column name with spaces""#.to_string()]);
+        select.add_select("bar".to_string());
         select.add_select("COUNT(1)".to_string());
-        select.add_select("SUM(1)".to_string());
         select.filters(vec![Filter {
-            lhs: String::from(r#""prefix""#),
-            operator: Operator::Equals,
-            rhs: SerdeValue::String("{prefix}".to_string()),
-        }]);
-
-        select.add_filter(Filter {
-            lhs: String::from(r#""base""#),
+            lhs: String::from("foo"),
             operator: Operator::Is,
-            rhs: SerdeValue::String("{base}".to_string()),
-        });
+            rhs: SerdeValue::String("{foo}".to_string()),
+        }]);
         select.add_filter(Filter {
-            lhs: String::from(r#""base""#),
-            operator: Operator::GreaterThan,
-            rhs: SerdeValue::Number(SerdeNumber::from(22)),
-        });
-        select.add_filter(Filter {
-            lhs: r#""ontology IRI""#.to_string(),
+            lhs: "bar".to_string(),
             operator: Operator::In,
             rhs: SerdeValue::Array(vec![
-                SerdeValue::String("{ontiri1}".to_string()),
-                SerdeValue::String("{ontiri2}".to_string()),
-                SerdeValue::Number(SerdeNumber::from(23)),
+                SerdeValue::String("{val1}".to_string()),
+                SerdeValue::String("{val2}".to_string()),
             ]),
         });
         select.order_by(vec![
-            ("base".to_string(), Direction::Ascending),
-            ("prefix".to_string(), Direction::Descending),
+            ("foo".to_string(), Direction::Ascending),
+            ("bar".to_string(), Direction::Descending),
         ]);
-        select.group_by(vec![r#""prefix""#.to_string()]);
-        select.add_group_by(r#""base""#.to_string());
-        select.add_group_by(r#""ontology IRI""#.to_string());
+        select.group_by(vec!["foo".to_string()]);
+        select.add_group_by(r#""a column name with spaces""#.to_string());
+        select.add_group_by("bar".to_string());
         select.having(vec![Filter {
             lhs: String::from("COUNT(1)"),
             operator: Operator::GreaterThan,
             rhs: SerdeValue::Number(SerdeNumber::from(1)),
         }]);
-        select.add_having(Filter {
-            lhs: String::from("SUM(1)"),
-            operator: Operator::GreaterThan,
-            rhs: SerdeValue::Number(SerdeNumber::from(1)),
-        });
-        eprintln!("{}", select.to_sql(&pg_pool).unwrap());
-        eprintln!("{}", select.to_sql(&sq_pool).unwrap());
+        select.limit(11);
+        select.offset(50);
+        let postgresql_sql = select.to_sql(&postgresql_pool).unwrap();
+        assert_eq!(
+            postgresql_sql,
+            format!(
+                "{} {} {} {} {} {} {}",
+                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+                r#"FROM "a table name with spaces""#,
+                r#"WHERE foo IS NOT DISTINCT FROM {foo} AND bar IN ({val1}, {val2})"#,
+                r#"GROUP BY foo, "a column name with spaces", bar"#,
+                r#"HAVING COUNT(1) > 1"#,
+                r#"ORDER BY foo ASC, bar DESC"#,
+                r#"LIMIT 11 OFFSET 50"#
+            )
+        );
+
+        let sqlite_sql = select.to_sql(&sqlite_pool).unwrap();
+        assert_eq!(
+            sqlite_sql,
+            format!(
+                "{} {} {} {} {} {} {}",
+                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+                r#"FROM "a table name with spaces""#,
+                r#"WHERE foo IS {foo} AND bar IN ({val1}, {val2})"#,
+                r#"GROUP BY foo, "a column name with spaces", bar"#,
+                r#"HAVING COUNT(1) > 1"#,
+                r#"ORDER BY foo ASC, bar DESC"#,
+                r#"LIMIT 11 OFFSET 50"#
+            )
+        );
+
+        let mut param_map = HashMap::new();
+        param_map.insert("foo", SerdeValue::String("foo_val".to_string()));
+        param_map.insert("val1", SerdeValue::String("bar_val1".to_string()));
+        param_map.insert("val2", SerdeValue::String("bar_val2".to_string()));
+
+        let (sql, params) = bind_sql(&postgresql_pool, &postgresql_sql, &param_map).unwrap();
+        assert_eq!(
+            sql,
+            format!(
+                "{} {} {} {} {} {} {}",
+                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+                r#"FROM "a table name with spaces""#,
+                r#"WHERE foo IS NOT DISTINCT FROM $1 AND bar IN ($2, $3)"#,
+                r#"GROUP BY foo, "a column name with spaces", bar"#,
+                r#"HAVING COUNT(1) > 1"#,
+                r#"ORDER BY foo ASC, bar DESC"#,
+                r#"LIMIT 11 OFFSET 50"#
+            )
+        );
+        match params[0] {
+            SerdeValue::String(s) if s == "foo_val" => assert!(true),
+            _ => assert!(false, "{} != 'foo_val'", params[0]),
+        };
+        match params[1] {
+            SerdeValue::String(s) if s == "bar_val1" => assert!(true),
+            _ => assert!(false, "{} != 'bar_val1'", params[1]),
+        };
+        match params[2] {
+            SerdeValue::String(s) if s == "bar_val2" => assert!(true),
+            _ => assert!(false, "{} != 'bar_val2'", params[2]),
+        };
+        let mut query = sqlx_query(&sql);
+        for param in &params {
+            match param {
+                SerdeValue::String(s) => query = query.bind(s),
+                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                _ => panic!("{} is not a string or a number.", param),
+            };
+        }
+        block_on(query.execute(&postgresql_pool)).unwrap();
+
+        let (sql, params) = bind_sql(&sqlite_pool, &sqlite_sql, &param_map).unwrap();
+        assert_eq!(
+            sql,
+            format!(
+                "{} {} {} {} {} {} {}",
+                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
+                r#"FROM "a table name with spaces""#,
+                r#"WHERE foo IS ? AND bar IN (?, ?)"#,
+                r#"GROUP BY foo, "a column name with spaces", bar"#,
+                r#"HAVING COUNT(1) > 1"#,
+                r#"ORDER BY foo ASC, bar DESC"#,
+                r#"LIMIT 11 OFFSET 50"#
+            )
+        );
+        match params[0] {
+            SerdeValue::String(s) if s == "foo_val" => assert!(true),
+            _ => assert!(false, "{} != 'foo_val'", params[0]),
+        };
+        match params[1] {
+            SerdeValue::String(s) if s == "bar_val1" => assert!(true),
+            _ => assert!(false, "{} != 'bar_val1'", params[1]),
+        };
+        match params[2] {
+            SerdeValue::String(s) if s == "bar_val2" => assert!(true),
+            _ => assert!(false, "{} != 'bar_val2'", params[2]),
+        };
+        let mut query = sqlx_query(&sql);
+        for param in &params {
+            match param {
+                SerdeValue::String(s) => query = query.bind(s),
+                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                _ => panic!("{} is not a string or a number.", param),
+            };
+        }
+        block_on(query.execute(&sqlite_pool)).unwrap();
     }
 }
