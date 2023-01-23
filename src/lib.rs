@@ -53,79 +53,79 @@ pub struct Filter {
     rhs: SerdeValue,
 }
 
+fn render_like_not_like(lhs: &str, rhs: &str, positive: bool) -> Result<String, String> {
+    let negation;
+    if !positive {
+        negation = " NOT";
+    } else {
+        negation = "";
+    }
+    Ok(format!("{}{} LIKE {}", lhs, negation, rhs))
+}
+
+fn render_ilike_not_ilike(
+    pool: &AnyPool,
+    lhs: &str,
+    rhs: &str,
+    positive: bool,
+) -> Result<String, String> {
+    let negation;
+    if !positive {
+        negation = " NOT";
+    } else {
+        negation = "";
+    }
+    if pool.any_kind() == AnyKind::Postgres {
+        Ok(format!("{}{} ILIKE {}", lhs, negation, rhs))
+    } else {
+        Ok(format!("LOWER({}){} LIKE LOWER({})", lhs, negation, rhs))
+    }
+}
+
+fn render_in_not_in(
+    lhs: &str,
+    options: &Vec<SerdeValue>,
+    positive: bool,
+) -> Result<String, String> {
+    let negation;
+    if !positive {
+        negation = " NOT";
+    } else {
+        negation = "";
+    }
+
+    let mut values = vec![];
+    let mut is_string_list = false;
+    for (i, option) in options.iter().enumerate() {
+        match option {
+            SerdeValue::String(s) => {
+                if i == 0 {
+                    is_string_list = true;
+                } else if !is_string_list {
+                    return Err(format!("{:?} contains both text and numeric types.", options));
+                }
+                values.push(format!("{}", s))
+            }
+            SerdeValue::Number(n) => {
+                if i == 0 {
+                    is_string_list = false;
+                } else if is_string_list {
+                    return Err(format!("{:?} contains both text and numeric types.", options));
+                }
+                values.push(format!("{}", n))
+            }
+            _ => return Err(format!("{:?} is not an array of strings or numbers.", options)),
+        };
+    }
+    let value_list = format!("({})", values.join(", "));
+    let filter_sql = format!("{}{} IN {}", lhs, negation, value_list);
+    Ok(filter_sql)
+}
+
 impl Filter {
     /// Clone the given filter.
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
-    }
-
-    fn render_like_not_like(lhs: &str, rhs: &str, positive: bool) -> Result<String, String> {
-        let negation;
-        if !positive {
-            negation = " NOT";
-        } else {
-            negation = "";
-        }
-        Ok(format!("{}{} LIKE {}", lhs, negation, rhs))
-    }
-
-    fn render_ilike_not_ilike(
-        pool: &AnyPool,
-        lhs: &str,
-        rhs: &str,
-        positive: bool,
-    ) -> Result<String, String> {
-        let negation;
-        if !positive {
-            negation = " NOT";
-        } else {
-            negation = "";
-        }
-        if pool.any_kind() == AnyKind::Postgres {
-            Ok(format!("{}{} ILIKE {}", lhs, negation, rhs))
-        } else {
-            Ok(format!("LOWER({}){} LIKE LOWER({})", lhs, negation, rhs))
-        }
-    }
-
-    fn render_in_not_in(
-        lhs: &str,
-        options: &Vec<SerdeValue>,
-        positive: bool,
-    ) -> Result<String, String> {
-        let negation;
-        if !positive {
-            negation = " NOT";
-        } else {
-            negation = "";
-        }
-
-        let mut values = vec![];
-        let mut is_string_list = false;
-        for (i, option) in options.iter().enumerate() {
-            match option {
-                SerdeValue::String(s) => {
-                    if i == 0 {
-                        is_string_list = true;
-                    } else if !is_string_list {
-                        return Err(format!("{:?} contains both text and numeric types.", options));
-                    }
-                    values.push(format!("{}", s))
-                }
-                SerdeValue::Number(n) => {
-                    if i == 0 {
-                        is_string_list = false;
-                    } else if is_string_list {
-                        return Err(format!("{:?} contains both text and numeric types.", options));
-                    }
-                    values.push(format!("{}", n))
-                }
-                _ => return Err(format!("{:?} is not an array of strings or numbers.", options)),
-            };
-        }
-        let value_list = format!("({})", values.join(", "));
-        let filter_sql = format!("{}{} IN {}", lhs, negation, value_list);
-        Ok(filter_sql)
     }
 
     /// Use the given database connection pool to convert the given filter into an SQL string
@@ -167,19 +167,19 @@ impl Filter {
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::Like => match &self.rhs {
-                SerdeValue::String(s) => Self::render_like_not_like(&self.lhs, s, true),
+                SerdeValue::String(s) => render_like_not_like(&self.lhs, s, true),
                 _ => Err(not_a_string_err),
             },
             Operator::NotLike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_like_not_like(&self.lhs, s, false),
+                SerdeValue::String(s) => render_like_not_like(&self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_ilike_not_ilike(pool, &self.lhs, s, true),
+                SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, true),
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_ilike_not_ilike(pool, &self.lhs, s, false),
+                SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
             Operator::Is => {
@@ -211,11 +211,11 @@ impl Filter {
                 }
             }
             Operator::In => match &self.rhs {
-                SerdeValue::Array(options) => Self::render_in_not_in(&self.lhs, options, true),
+                SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, true),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
             Operator::NotIn => match &self.rhs {
-                SerdeValue::Array(options) => Self::render_in_not_in(&self.lhs, options, false),
+                SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, false),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
         }
