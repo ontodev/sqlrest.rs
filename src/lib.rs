@@ -72,8 +72,6 @@ impl Direction {
     }
 }
 
-// TODO: Use Into to avoid many of the uses of to_string()
-
 /// Representation of a filter in an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Filter {
@@ -83,21 +81,21 @@ pub struct Filter {
 }
 
 /// TODO: Add doctring here
-fn render_like_not_like(lhs: &str, rhs: &str, positive: bool) -> Result<String, String> {
+fn render_like_not_like<S: Into<String>>(lhs: S, rhs: S, positive: bool) -> Result<String, String> {
     let negation;
     if !positive {
         negation = " NOT";
     } else {
         negation = "";
     }
-    Ok(format!("{}{} LIKE {}", lhs, negation, rhs))
+    Ok(format!("{}{} LIKE {}", lhs.into(), negation, rhs.into()))
 }
 
 /// TODO: Add doctring here
-fn render_ilike_not_ilike(
+fn render_ilike_not_ilike<S: Into<String>>(
     pool: &AnyPool,
-    lhs: &str,
-    rhs: &str,
+    lhs: S,
+    rhs: S,
     positive: bool,
 ) -> Result<String, String> {
     let negation;
@@ -107,15 +105,15 @@ fn render_ilike_not_ilike(
         negation = "";
     }
     if pool.any_kind() == AnyKind::Postgres {
-        Ok(format!("{}{} ILIKE {}", lhs, negation, rhs))
+        Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs.into()))
     } else {
-        Ok(format!("LOWER({}){} LIKE LOWER({})", lhs, negation, rhs))
+        Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs.into()))
     }
 }
 
 /// TODO: Add doctring here
-fn render_in_not_in(
-    lhs: &str,
+fn render_in_not_in<S: Into<String>>(
+    lhs: S,
     options: &Vec<SerdeValue>,
     positive: bool,
 ) -> Result<String, String> {
@@ -150,11 +148,56 @@ fn render_in_not_in(
         };
     }
     let value_list = format!("({})", values.join(", "));
-    let filter_sql = format!("{}{} IN {}", lhs, negation, value_list);
+    let filter_sql = format!("{}{} IN {}", lhs.into(), negation, value_list);
     Ok(filter_sql)
 }
 
+/// TODO: Add docstring here
+fn render_is_not_is<S: Into<String>>(
+    pool: &AnyPool,
+    lhs: S,
+    rhs: &SerdeValue,
+    error_msg: S,
+    positive: bool,
+) -> Result<String, String> {
+    let value = match rhs {
+        SerdeValue::String(s) => s.to_string(),
+        SerdeValue::Number(n) => {
+            format!("{}", n)
+        }
+        _ => return Err(error_msg.into()),
+    };
+    if pool.any_kind() == AnyKind::Sqlite {
+        Ok(format!(
+            "{} IS{} {}",
+            lhs.into(),
+            {
+                if positive {
+                    ""
+                } else {
+                    " NOT"
+                }
+            },
+            value
+        ))
+    } else {
+        Ok(format!(
+            "{} IS{} DISTINCT FROM {}",
+            lhs.into(),
+            {
+                if positive {
+                    " NOT"
+                } else {
+                    ""
+                }
+            },
+            value
+        ))
+    }
+}
+
 impl Filter {
+    /// Given a left hand side, a right hand side, and an operator, create a new filter.
     pub fn new<S: Into<String>>(
         lhs: S,
         operator: S,
@@ -170,10 +213,6 @@ impl Filter {
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
     }
-
-    // TODO: Allow creating a filter using: ~filter("COUNT(1)", ">", 1)~
-    // Note: The function should use Into<String> as we do elsewhere so that we don't have to worry
-    // about the difference between String and &str.
 
     /// Use the given database connection pool to convert the given filter into an SQL string
     /// suitable to be used in a WHERE clause, using the syntax appropriate to the kind of database
@@ -229,34 +268,11 @@ impl Filter {
                 SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
-            // TODO: Refactor IS and IS NOT.
             Operator::Is => {
-                let value = match &self.rhs {
-                    SerdeValue::String(s) => s.to_string(),
-                    SerdeValue::Number(n) => {
-                        format!("{}", n)
-                    }
-                    _ => return Err(not_a_string_or_number_err),
-                };
-                if pool.any_kind() == AnyKind::Sqlite {
-                    Ok(format!("{} IS {}", self.lhs, value))
-                } else {
-                    Ok(format!("{} IS NOT DISTINCT FROM {}", self.lhs, value))
-                }
+                render_is_not_is(pool, &self.lhs, &self.rhs, &not_a_string_or_number_err, true)
             }
             Operator::IsNot => {
-                let value = match &self.rhs {
-                    SerdeValue::String(s) => s.to_string(),
-                    SerdeValue::Number(n) => {
-                        format!("{}", n)
-                    }
-                    _ => return Err(not_a_string_or_number_err),
-                };
-                if pool.any_kind() == AnyKind::Sqlite {
-                    Ok(format!("{} IS NOT {}", self.lhs, value))
-                } else {
-                    Ok(format!("{} IS DISTINCT FROM {}", self.lhs, value))
-                }
+                render_is_not_is(pool, &self.lhs, &self.rhs, &not_a_string_or_number_err, false)
             }
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, true),
@@ -287,20 +303,15 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// A structure to represent an SQL select statement.
 /// Examples:
 /// ```rust,ignore
-/// // Initialise a new Select object using struct syntax:
+/// // Initialise a new Select object using struct syntax. Note that if the select field is empty,
+/// // then the database will be queried when converting the struct to SQL, so as to include all of
+/// // the table's defined columns in the SELECT clause.
 /// let select = Select {
 ///     // When names require quotation marks (e.g. if they contain a space), then these must be
 ///     // supplied by the user:
 ///     table: String::from(r#""my table""#),
-///     // If the select field is empty, then the database will be queried when converting the
-///     // struct to SQL, so as to include all of the table's defined columns in the SELECT clause.
-///     select: vec![],
-///     filters: vec![],
-///     group_by: vec![],
-///     having: vec![],
-///     order_by: vec![],
 ///     limit: Some(10),
-///     offset: None,
+///     ..Default::default()
 /// };
 ///
 /// let expected_sql = format!(
@@ -314,17 +325,17 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// // Initialise a new Select object by calling new() and then progressively add further
 /// // information.
 /// let mut select = Select::new();
-/// select.table(r#""a table name with spaces""#.to_string());
-/// select.select(vec!["foo".to_string(), r#""a column name with spaces""#.to_string()]);
-/// select.add_select("bar".to_string());
-/// select.add_select("COUNT(1)".to_string());
+/// select.table(r#""a table name with spaces""#);
+/// select.select(vec!["foo", r#""a column name with spaces""#]);
+/// select.add_select("bar");
+/// select.add_select("COUNT(1)");
 /// select.filters(vec![Filter {
 ///     lhs: String::from("foo"),
 ///     operator: Operator::Is,
 ///     rhs: SerdeValue::String("{foo}".to_string()),
 /// }]);
 /// select.add_filter(Filter {
-///     lhs: "bar".to_string(),
+///     lhs: "bar",
 ///     operator: Operator::In,
 ///     rhs: SerdeValue::Array(vec![
 ///         SerdeValue::String("{val1}".to_string()),
@@ -332,12 +343,12 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 ///     ]),
 /// });
 /// select.order_by(vec![
-///     ("foo".to_string(), Direction::Ascending),
-///     ("bar".to_string(), Direction::Descending),
+///     ("foo", Direction::Ascending),
+///     ("bar", Direction::Descending),
 /// ]);
-/// select.group_by(vec!["foo".to_string()]);
-/// select.add_group_by(r#""a column name with spaces""#.to_string());
-/// select.add_group_by("bar".to_string());
+/// select.group_by(vec!["foo"]);
+/// select.add_group_by(r#""a column name with spaces""#);
+/// select.add_group_by("bar");
 /// select.having(vec![Filter {
 ///     lhs: String::from("COUNT(1)"),
 ///     operator: Operator::GreaterThan,
@@ -500,33 +511,33 @@ impl Select {
 
     /// Given a vector of filters, replace the current contents of `self.filters` with the contents
     /// of the given vector.
-    pub fn filters<F: Into<Filter>>(&mut self, filters: Vec<F>) -> &mut Select {
+    pub fn filters(&mut self, filters: Vec<Filter>) -> &mut Select {
         self.filters.clear();
         for f in filters {
-            self.filters.push(f.into());
+            self.filters.push(f);
         }
         self
     }
 
     /// Given a filter, add it to the vector, `self.filters`.
-    pub fn add_filter<F: Into<Filter>>(&mut self, filter: F) -> &mut Select {
-        self.filters.push(filter.into());
+    pub fn add_filter(&mut self, filter: Filter) -> &mut Select {
+        self.filters.push(filter);
         self
     }
 
     /// Given a vector of filters, replace the current contents of `self.having` with the contents
     /// of the given vector.
-    pub fn having<F: Into<Filter>>(&mut self, filters: Vec<F>) -> &mut Select {
+    pub fn having(&mut self, filters: Vec<Filter>) -> &mut Select {
         self.having.clear();
         for f in filters {
-            self.having.push(f.into());
+            self.having.push(f);
         }
         self
     }
 
     /// Given a filter, add it to the vector, `self.having`.
-    pub fn add_having<F: Into<Filter>>(&mut self, filter: F) -> &mut Select {
-        self.having.push(filter.into());
+    pub fn add_having(&mut self, filter: Filter) -> &mut Select {
+        self.having.push(filter);
         self
     }
 
@@ -604,11 +615,12 @@ pub fn selects_to_sql(
 /// [SqlParam::String("red"), SqlParam::String("green")]. In the case of a PostgreSQL database,
 /// the returned vector will be the same but the string will be
 /// "SELECT column FROM table WHERE column IN ($1, $2)".
-pub fn bind_sql<'a>(
+pub fn bind_sql<'a, S: Into<String>>(
     pool: &AnyPool,
-    sql: &str,
+    sql: S,
     param_map: &'a HashMap<&str, SerdeValue>,
 ) -> Result<(String, Vec<&'a SerdeValue>), String> {
+    let sql = sql.into();
     // This regex will find quoted strings as well as variables of the form `{key}` where `key` is
     // a token consisting of word characters and/or underscores:
     let rx = Regex::new(r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")|\B\{[\w_]+\}\B"#)
@@ -620,7 +632,7 @@ pub fn bind_sql<'a>(
 
     let mut pg_param_idx = 1;
     let mut saved_start = 0;
-    for m in rx.find_iter(sql) {
+    for m in rx.find_iter(&sql) {
         let this_match = &sql[m.start()..m.end()];
         final_sql.push_str(&sql[saved_start..m.start()]);
         if (this_match.starts_with("\"") && this_match.ends_with("\""))
@@ -656,7 +668,9 @@ pub fn bind_sql<'a>(
 /// for unbound parameters to Sqlite syntax, which uses "?", otherwise use Postgres syntax, which
 /// uses numbered parameters, i.e., $1, $2, ...
 /// Note that SQL_PARAM must be a 'word' (in the regular expression sense)
-pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
+pub fn local_sql_syntax<S: Into<String>>(pool: &AnyPool, sql_param: S, sql: S) -> String {
+    let sql_param = sql_param.into();
+    let sql = sql.into();
     // The reason that SQL_PARAM must be a word is that below we are matchng against it using '\b'
     // which represents a word boundary. If you want to use a non-word placeholder then you must
     // also change '\b' in the regex below to '\B'.
@@ -671,7 +685,7 @@ pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
     let mut final_sql = String::from("");
     let mut pg_param_idx = 1;
     let mut saved_start = 0;
-    for m in rx.find_iter(sql) {
+    for m in rx.find_iter(&sql) {
         let this_match = &sql[m.start()..m.end()];
         final_sql.push_str(&sql[saved_start..m.start()]);
         if this_match == sql_param {
@@ -699,19 +713,20 @@ pub fn local_sql_syntax(pool: &AnyPool, sql_param: &str, sql: &str) -> String {
 /// for. VALVE currently supports:
 /// (1) PostgreSQL, which uses numbered variables $N, e.g., SELECT 1 FROM foo WHERE bar IN ($1, $2)
 /// (2) SQLite, which uses question marks, e.g., SELECT 1 FROM foo WHERE bar IN (?, ?)
-pub fn interpolate_sql(
+pub fn interpolate_sql<S: Into<String>>(
     pool: &AnyPool,
-    sql: &str,
+    sql: S,
     params: &Vec<&SerdeValue>,
-    placeholder_str: Option<&str>,
+    placeholder_str: Option<S>,
 ) -> Result<String, String> {
+    let sql = sql.into();
     let mut final_sql = String::from("");
     let mut saved_start = 0;
 
     let quotes = r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")"#;
     let rx;
     if let Some(s) = placeholder_str {
-        rx = Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s)).unwrap();
+        rx = Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s.into())).unwrap();
     } else if pool.any_kind() == AnyKind::Postgres {
         rx = Regex::new(&format!(r#"{}|\B[$]\d+\b"#, quotes)).unwrap();
     } else {
@@ -719,7 +734,7 @@ pub fn interpolate_sql(
     }
 
     let mut param_index = 0;
-    for m in rx.find_iter(sql) {
+    for m in rx.find_iter(&sql) {
         let this_match = &sql[m.start()..m.end()];
         final_sql.push_str(&sql[saved_start..m.start()]);
         if !((this_match.starts_with("\"") && this_match.ends_with("\""))
@@ -781,7 +796,7 @@ mod tests {
         test_params.insert("table", SerdeValue::String("foo".to_string()));
         test_params.insert("row_num", SerdeValue::Number(SerdeNumber::from(1)));
         test_params.insert("column", SerdeValue::String("bar".to_string()));
-        let (test_sql, test_params) = bind_sql(pool, &test_sql, &test_params).unwrap();
+        let (test_sql, test_params) = bind_sql(pool, test_sql, &test_params).unwrap();
         let mut test_query = sqlx_query(&test_sql);
         for param in &test_params {
             match param {
