@@ -7,7 +7,7 @@ use sqlx::{
     any::{AnyKind, AnyPool},
     query as sqlx_query, Row,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 /// Representation of an operator of an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
@@ -26,6 +26,33 @@ pub enum Operator {
     IsNot,
     In,
     NotIn,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseOperatorError;
+
+impl FromStr for Operator {
+    type Err = ParseOperatorError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "eq" => Ok(Operator::Equals),
+            "not_eq" => Ok(Operator::NotEquals),
+            "lt" => Ok(Operator::LessThan),
+            "gt" => Ok(Operator::GreaterThan),
+            "lte" => Ok(Operator::LessThanEquals),
+            "gte" => Ok(Operator::GreaterThanEquals),
+            "like" => Ok(Operator::Like),
+            "not_like" => Ok(Operator::NotLike),
+            "ilike" => Ok(Operator::ILike),
+            "not_ilike" => Ok(Operator::NotILike),
+            "is" => Ok(Operator::Is),
+            "not_is" => Ok(Operator::IsNot),
+            "in" => Ok(Operator::In),
+            "not_in" => Ok(Operator::NotIn),
+            _ => Err(ParseOperatorError),
+        }
+    }
 }
 
 /// The direction of an ORDER BY clause in an SQL query.
@@ -128,6 +155,17 @@ fn render_in_not_in(
 }
 
 impl Filter {
+    pub fn new<S: Into<String>>(
+        lhs: S,
+        operator: S,
+        rhs: SerdeValue,
+    ) -> Result<Filter, ParseOperatorError> {
+        match Operator::from_str(&operator.into()) {
+            Ok(operator) => Ok(Filter { lhs: lhs.into(), operator: operator, rhs: rhs }),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Clone the given filter.
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
@@ -890,28 +928,30 @@ mod tests {
         select.select(vec!["foo", r#""a column name with spaces""#]);
         select.add_select("bar");
         select.add_select("COUNT(1)");
-        select.filters(vec![Filter {
-            lhs: String::from("foo"),
-            operator: Operator::Is,
-            rhs: SerdeValue::String("{foo}".to_string()),
-        }]);
-        select.add_filter(Filter {
-            lhs: "bar".to_string(),
-            operator: Operator::In,
-            rhs: SerdeValue::Array(vec![
-                SerdeValue::String("{val1}".to_string()),
-                SerdeValue::String("{val2}".to_string()),
-            ]),
-        });
+        select.filters(vec![
+            Filter::new("foo", "is", SerdeValue::String("{foo}".to_string())).unwrap()
+        ]);
+        select.add_filter(
+            Filter::new(
+                "bar",
+                "in",
+                SerdeValue::Array(vec![
+                    SerdeValue::String("{val1}".to_string()),
+                    SerdeValue::String("{val2}".to_string()),
+                ]),
+            )
+            .unwrap(),
+        );
         select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
         select.group_by(vec!["foo"]);
         select.add_group_by(r#""a column name with spaces""#);
         select.add_group_by("bar");
-        select.having(vec![Filter {
-            lhs: String::from("COUNT(1)"),
-            operator: Operator::GreaterThan,
-            rhs: SerdeValue::Number(SerdeNumber::from(1)),
-        }]);
+        select.having(vec![Filter::new(
+            "COUNT(1)",
+            "gt",
+            SerdeValue::Number(SerdeNumber::from(1)),
+        )
+        .unwrap()]);
         select.limit(11);
         select.offset(50);
 
