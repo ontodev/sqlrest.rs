@@ -468,6 +468,13 @@ impl Select {
         self
     }
 
+    /// Given a column name, add it to the vector, `self.order_by`.
+    pub fn add_order_by<S: Into<String>>(&mut self, order_by: (S, Direction)) -> &mut Select {
+        let (column, direction) = order_by;
+        self.order_by.push((column.into(), direction));
+        self
+    }
+
     /// Given an unsigned integer `limit`, set `self.limit` to the value of `limit`.
     pub fn limit(&mut self, limit: usize) -> &mut Select {
         self.limit = Some(limit);
