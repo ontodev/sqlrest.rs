@@ -80,7 +80,8 @@ pub struct Filter {
     rhs: SerdeValue,
 }
 
-/// TODO: Add doctring here
+/// Given strings representing the left and right hand sides of a filter, render an SQL string
+/// of the form 'lhs LIKE rhs' when the `positive` flag is true, and 'lhs NOT LIKE rhs' otherwise.
 fn render_like_not_like<S: Into<String>>(lhs: S, rhs: S, positive: bool) -> Result<String, String> {
     let negation;
     if !positive {
@@ -91,7 +92,10 @@ fn render_like_not_like<S: Into<String>>(lhs: S, rhs: S, positive: bool) -> Resu
     Ok(format!("{}{} LIKE {}", lhs.into(), negation, rhs.into()))
 }
 
-/// TODO: Add doctring here
+/// Given strings representing the left and right hand sides of a filter, render an SQL string
+/// representing a case-insensitve LIKE relation between the lhs and rhs in the case when
+/// `positive` is true, or the negation of such a statement otherwise. The appropriate syntax
+/// will be determined on the basis of the given database connection pool.
 fn render_ilike_not_ilike<S: Into<String>>(
     pool: &AnyPool,
     lhs: S,
@@ -111,7 +115,9 @@ fn render_ilike_not_ilike<S: Into<String>>(
     }
 }
 
-/// TODO: Add doctring here
+/// Given a string representing the left hand side of a filter, and a vector of options representing
+/// the right hand side, render an SQL string expressing an IN relation between lhs and rhs when
+/// `positive` is true, or a NOT IN relation otherwise.
 fn render_in_not_in<S: Into<String>>(
     lhs: S,
     options: &Vec<SerdeValue>,
@@ -152,12 +158,16 @@ fn render_in_not_in<S: Into<String>>(
     Ok(filter_sql)
 }
 
-/// TODO: Add docstring here
+/// Given a string representing the left hand side of a filter, a string or number (encoded as a
+/// SerdeValue) representing the right hand side, render an SQL string representing the equivalent
+/// of a case-insensitve IS relation between the lhs and rhs in the case when `positive` is true,
+/// or the negation of such a statement otherwise. The appropriate syntax will be determined on the
+/// basis of the given database connection pool. For example, PostgreSQL's IS NOT DISTINCT FROM
+/// is equivalent to SQLite's IS operator, and IS DISTINCT FROM is the same as IS NOT.
 fn render_is_not_is<S: Into<String>>(
     pool: &AnyPool,
     lhs: S,
     rhs: &SerdeValue,
-    error_msg: S,
     positive: bool,
 ) -> Result<String, String> {
     let value = match rhs {
@@ -165,7 +175,7 @@ fn render_is_not_is<S: Into<String>>(
         SerdeValue::Number(n) => {
             format!("{}", n)
         }
-        _ => return Err(error_msg.into()),
+        _ => return Err(format!("{} is neither a string nor a number", rhs)),
     };
     if pool.any_kind() == AnyKind::Sqlite {
         Ok(format!(
@@ -268,12 +278,8 @@ impl Filter {
                 SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
-            Operator::Is => {
-                render_is_not_is(pool, &self.lhs, &self.rhs, &not_a_string_or_number_err, true)
-            }
-            Operator::IsNot => {
-                render_is_not_is(pool, &self.lhs, &self.rhs, &not_a_string_or_number_err, false)
-            }
+            Operator::Is => render_is_not_is(pool, &self.lhs, &self.rhs, true),
+            Operator::IsNot => render_is_not_is(pool, &self.lhs, &self.rhs, false),
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, true),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
