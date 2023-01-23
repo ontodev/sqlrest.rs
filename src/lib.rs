@@ -481,6 +481,13 @@ impl Select {
     }
 }
 
+/// Given a database pool and a vector of N Select structs, generate an SQL statement such that the
+/// first N - 1 Select structs are interpreted as simple CTEs, and the Nth Select struct is
+/// interpreted as the main query.
+pub fn selects_to_sql(selects: &Vec<Select>, pool: &AnyPool) -> Result<String, String> {
+    Ok("Great!".to_string())
+}
+
 /// Given a database pool and a SQL string containing a number of placeholders, `{key}`, where `key`
 /// corresponds to one of the keys in the given parameter map, return a string and a vector of
 /// SqlParams, where every placeholder `{key}` in the original SQL string is replaced in the
@@ -747,6 +754,7 @@ mod tests {
 
     #[test]
     fn select() {
+        // Setup database connections and create the needed tables:
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
         let postgresql_pool =
@@ -780,6 +788,10 @@ mod tests {
             }
         }
 
+        /////////////////////////////
+        // Create a Select object using struct syntax and convert it to an SQL string, testing both
+        // PostgreSQL and SQLite:
+        /////////////////////////////
         let select = Select {
             table: String::from("my_table"),
             select: vec![
@@ -804,6 +816,12 @@ mod tests {
         assert_eq!(select.to_sql(&postgresql_pool).unwrap(), expected_sql);
         assert_eq!(select.to_sql(&sqlite_pool).unwrap(), expected_sql);
 
+        /////////////////////////////
+        // Create a Select object by initializing an empty object, progressively add subclauses,
+        // and then convert it to an SQL string, in PostgreSQL and SQLIte syntax. Finally, bind the
+        // SQL and verify the bindings.
+        /////////////////////////////
+        // Progressively create a Select object:
         let mut select = Select::new();
         select.table(r#""a table name with spaces""#.to_string());
         select.select(vec!["foo".to_string(), r#""a column name with spaces""#.to_string()]);
@@ -836,111 +854,76 @@ mod tests {
         }]);
         select.limit(11);
         select.offset(50);
-        let postgresql_sql = select.to_sql(&postgresql_pool).unwrap();
-        assert_eq!(
-            postgresql_sql,
-            format!(
-                "{} {} {} {} {} {} {}",
-                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-                r#"FROM "a table name with spaces""#,
-                r#"WHERE foo IS NOT DISTINCT FROM {foo} AND bar IN ({val1}, {val2})"#,
-                r#"GROUP BY foo, "a column name with spaces", bar"#,
-                r#"HAVING COUNT(1) > 1"#,
-                r#"ORDER BY foo ASC, bar DESC"#,
-                r#"LIMIT 11 OFFSET 50"#
-            )
-        );
 
-        let sqlite_sql = select.to_sql(&sqlite_pool).unwrap();
-        assert_eq!(
-            sqlite_sql,
-            format!(
-                "{} {} {} {} {} {} {}",
-                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-                r#"FROM "a table name with spaces""#,
-                r#"WHERE foo IS {foo} AND bar IN ({val1}, {val2})"#,
-                r#"GROUP BY foo, "a column name with spaces", bar"#,
-                r#"HAVING COUNT(1) > 1"#,
-                r#"ORDER BY foo ASC, bar DESC"#,
-                r#"LIMIT 11 OFFSET 50"#
-            )
-        );
+        // Convert the Select to SQL in both PostgreSQL and SQLite:
+        for pool in vec![&postgresql_pool, &sqlite_pool] {
+            let (is_clause, placeholder1, placeholder2, placeholder3);
+            if pool.any_kind() == AnyKind::Postgres {
+                is_clause = "IS NOT DISTINCT FROM";
+                placeholder1 = "$1";
+                placeholder2 = "$2";
+                placeholder3 = "$3";
+            } else {
+                is_clause = "IS";
+                placeholder1 = "?";
+                placeholder2 = "?";
+                placeholder3 = "?";
+            }
 
-        let mut param_map = HashMap::new();
-        param_map.insert("foo", SerdeValue::String("foo_val".to_string()));
-        param_map.insert("val1", SerdeValue::String("bar_val1".to_string()));
-        param_map.insert("val2", SerdeValue::String("bar_val2".to_string()));
+            let expected_sql_with_mapvars = format!(
+                "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+                 FROM \"a table name with spaces\" \
+                 WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
+                 GROUP BY foo, \"a column name with spaces\", bar \
+                 HAVING COUNT(1) > 1 \
+                 ORDER BY foo ASC, bar DESC \
+                 LIMIT 11 OFFSET 50",
+                is_clause,
+            );
+            let sql = select.to_sql(&pool).unwrap();
+            assert_eq!(expected_sql_with_mapvars, sql);
 
-        let (sql, params) = bind_sql(&postgresql_pool, &postgresql_sql, &param_map).unwrap();
-        assert_eq!(
-            sql,
-            format!(
-                "{} {} {} {} {} {} {}",
-                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-                r#"FROM "a table name with spaces""#,
-                r#"WHERE foo IS NOT DISTINCT FROM $1 AND bar IN ($2, $3)"#,
-                r#"GROUP BY foo, "a column name with spaces", bar"#,
-                r#"HAVING COUNT(1) > 1"#,
-                r#"ORDER BY foo ASC, bar DESC"#,
-                r#"LIMIT 11 OFFSET 50"#
-            )
-        );
-        match params[0] {
-            SerdeValue::String(s) if s == "foo_val" => assert!(true),
-            _ => assert!(false, "{} != 'foo_val'", params[0]),
-        };
-        match params[1] {
-            SerdeValue::String(s) if s == "bar_val1" => assert!(true),
-            _ => assert!(false, "{} != 'bar_val1'", params[1]),
-        };
-        match params[2] {
-            SerdeValue::String(s) if s == "bar_val2" => assert!(true),
-            _ => assert!(false, "{} != 'bar_val2'", params[2]),
-        };
-        let mut query = sqlx_query(&sql);
-        for param in &params {
-            match param {
-                SerdeValue::String(s) => query = query.bind(s),
-                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                _ => panic!("{} is not a string or a number.", param),
+            // Bind the SQL and verify the binding:
+            let mut param_map = HashMap::new();
+            param_map.insert("foo", SerdeValue::String("foo_val".to_string()));
+            param_map.insert("val1", SerdeValue::String("bar_val1".to_string()));
+            param_map.insert("val2", SerdeValue::String("bar_val2".to_string()));
+
+            let expected_sql_with_listvars = format!(
+                "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+                 FROM \"a table name with spaces\" \
+                 WHERE foo {} {} AND bar IN ({}, {}) \
+                 GROUP BY foo, \"a column name with spaces\", bar \
+                 HAVING COUNT(1) > 1 \
+                 ORDER BY foo ASC, bar DESC \
+                 LIMIT 11 OFFSET 50",
+                is_clause, placeholder1, placeholder2, placeholder3,
+            );
+            let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
+            assert_eq!(expected_sql_with_listvars, sql);
+            match params[0] {
+                SerdeValue::String(s) if s == "foo_val" => assert!(true),
+                _ => assert!(false, "{} != 'foo_val'", params[0]),
             };
-        }
-        block_on(query.execute(&postgresql_pool)).unwrap();
-
-        let (sql, params) = bind_sql(&sqlite_pool, &sqlite_sql, &param_map).unwrap();
-        assert_eq!(
-            sql,
-            format!(
-                "{} {} {} {} {} {} {}",
-                r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-                r#"FROM "a table name with spaces""#,
-                r#"WHERE foo IS ? AND bar IN (?, ?)"#,
-                r#"GROUP BY foo, "a column name with spaces", bar"#,
-                r#"HAVING COUNT(1) > 1"#,
-                r#"ORDER BY foo ASC, bar DESC"#,
-                r#"LIMIT 11 OFFSET 50"#
-            )
-        );
-        match params[0] {
-            SerdeValue::String(s) if s == "foo_val" => assert!(true),
-            _ => assert!(false, "{} != 'foo_val'", params[0]),
-        };
-        match params[1] {
-            SerdeValue::String(s) if s == "bar_val1" => assert!(true),
-            _ => assert!(false, "{} != 'bar_val1'", params[1]),
-        };
-        match params[2] {
-            SerdeValue::String(s) if s == "bar_val2" => assert!(true),
-            _ => assert!(false, "{} != 'bar_val2'", params[2]),
-        };
-        let mut query = sqlx_query(&sql);
-        for param in &params {
-            match param {
-                SerdeValue::String(s) => query = query.bind(s),
-                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                _ => panic!("{} is not a string or a number.", param),
+            match params[1] {
+                SerdeValue::String(s) if s == "bar_val1" => assert!(true),
+                _ => assert!(false, "{} != 'bar_val1'", params[1]),
             };
+            match params[2] {
+                SerdeValue::String(s) if s == "bar_val2" => assert!(true),
+                _ => assert!(false, "{} != 'bar_val2'", params[2]),
+            };
+
+            // Create and execute the query:
+            let mut query = sqlx_query(&sql);
+            for param in &params {
+                match param {
+                    SerdeValue::String(s) => query = query.bind(s),
+                    SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                    _ => panic!("{} is not a string or a number.", param),
+                };
+            }
+            block_on(query.execute(pool)).unwrap();
         }
-        block_on(query.execute(&sqlite_pool)).unwrap();
     }
 }
