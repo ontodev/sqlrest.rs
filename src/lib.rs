@@ -45,6 +45,8 @@ impl Direction {
     }
 }
 
+// TODO: Use Into to avoid many of the uses of to_string()
+
 /// Representation of a filter in an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Filter {
@@ -53,6 +55,7 @@ pub struct Filter {
     rhs: SerdeValue,
 }
 
+/// TODO: Add doctring here
 fn render_like_not_like(lhs: &str, rhs: &str, positive: bool) -> Result<String, String> {
     let negation;
     if !positive {
@@ -63,6 +66,7 @@ fn render_like_not_like(lhs: &str, rhs: &str, positive: bool) -> Result<String, 
     Ok(format!("{}{} LIKE {}", lhs, negation, rhs))
 }
 
+/// TODO: Add doctring here
 fn render_ilike_not_ilike(
     pool: &AnyPool,
     lhs: &str,
@@ -82,6 +86,7 @@ fn render_ilike_not_ilike(
     }
 }
 
+/// TODO: Add doctring here
 fn render_in_not_in(
     lhs: &str,
     options: &Vec<SerdeValue>,
@@ -127,6 +132,10 @@ impl Filter {
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
     }
+
+    // TODO: Allow creating a filter using: ~filter("COUNT(1)", ">", 1)~
+    // Note: The function should use Into<String> as we do elsewhere so that we don't have to worry
+    // about the difference between String and &str.
 
     /// Use the given database connection pool to convert the given filter into an SQL string
     /// suitable to be used in a WHERE clause, using the syntax appropriate to the kind of database
@@ -182,6 +191,7 @@ impl Filter {
                 SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
+            // TODO: Refactor IS and IS NOT.
             Operator::Is => {
                 let value = match &self.rhs {
                     SerdeValue::String(s) => s.to_string(),
@@ -540,7 +550,7 @@ pub fn selects_to_sql(
         Err(e) => return Err(e),
         Ok(sql1) => match select2.to_sql(pool) {
             Err(e) => return Err(e),
-            Ok(sql2) => return Ok(format!("WITH cte AS ({}) {}", sql1, sql2)),
+            Ok(sql2) => return Ok(format!("WITH {} AS ({}) {}", select2.table, sql1, sql2)),
         },
     };
 }
@@ -858,12 +868,8 @@ mod tests {
                 r#""ontology IRI""#.to_string(),
                 r#""version IRI""#.to_string(),
             ],
-            filters: vec![],
-            group_by: vec![],
-            having: vec![],
-            order_by: vec![],
             limit: Some(10),
-            offset: None,
+            ..Default::default()
         };
         let expected_sql = format!(
             r#"{} {}"#,
@@ -880,10 +886,10 @@ mod tests {
         /////////////////////////////
         // Progressively create a Select object:
         let mut select = Select::new();
-        select.table(r#""a table name with spaces""#.to_string());
-        select.select(vec!["foo".to_string(), r#""a column name with spaces""#.to_string()]);
-        select.add_select("bar".to_string());
-        select.add_select("COUNT(1)".to_string());
+        select.table(r#""a table name with spaces""#);
+        select.select(vec!["foo", r#""a column name with spaces""#]);
+        select.add_select("bar");
+        select.add_select("COUNT(1)");
         select.filters(vec![Filter {
             lhs: String::from("foo"),
             operator: Operator::Is,
@@ -897,13 +903,10 @@ mod tests {
                 SerdeValue::String("{val2}".to_string()),
             ]),
         });
-        select.order_by(vec![
-            ("foo".to_string(), Direction::Ascending),
-            ("bar".to_string(), Direction::Descending),
-        ]);
-        select.group_by(vec!["foo".to_string()]);
-        select.add_group_by(r#""a column name with spaces""#.to_string());
-        select.add_group_by("bar".to_string());
+        select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
+        select.group_by(vec!["foo"]);
+        select.add_group_by(r#""a column name with spaces""#);
+        select.add_group_by("bar");
         select.having(vec![Filter {
             lhs: String::from("COUNT(1)"),
             operator: Operator::GreaterThan,
