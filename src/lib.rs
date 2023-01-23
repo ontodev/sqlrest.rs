@@ -481,11 +481,21 @@ impl Select {
     }
 }
 
-/// Given a database pool and a vector of N Select structs, generate an SQL statement such that the
-/// first N - 1 Select structs are interpreted as simple CTEs, and the Nth Select struct is
+/// Given a database pool and two Select structs, generate an SQL statement such that the
+/// first Select struct is interpreted as a simple CTE, and the second Select struct is
 /// interpreted as the main query.
-pub fn selects_to_sql(selects: &Vec<Select>, pool: &AnyPool) -> Result<String, String> {
-    Ok("Great!".to_string())
+pub fn selects_to_sql(
+    select1: &Select,
+    select2: &Select,
+    pool: &AnyPool,
+) -> Result<String, String> {
+    match select1.to_sql(pool) {
+        Err(e) => return Err(e),
+        Ok(sql1) => match select2.to_sql(pool) {
+            Err(e) => return Err(e),
+            Ok(sql2) => return Ok(format!("WITH cte AS ({}) {}", sql1, sql2)),
+        },
+    };
 }
 
 /// Given a database pool and a SQL string containing a number of placeholders, `{key}`, where `key`
@@ -925,5 +935,36 @@ mod tests {
             }
             block_on(query.execute(pool)).unwrap();
         }
+
+        /////////////////////////////
+        // Combine two selects
+        /////////////////////////////
+        let cte = Select {
+            table: String::from("my_table"),
+            select: vec!["prefix".to_string()],
+            filters: vec![],
+            group_by: vec![],
+            having: vec![],
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        };
+        let main_select = Select {
+            table: String::from("cte"),
+            select: vec!["prefix".to_string()],
+            filters: vec![],
+            group_by: vec![],
+            having: vec![],
+            order_by: vec![],
+            limit: Some(10),
+            offset: None,
+        };
+        let sql = selects_to_sql(&cte, &main_select, &postgresql_pool).unwrap();
+        assert_eq!(
+            sql,
+            "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10",
+        );
+        let query = sqlx_query(&sql);
+        block_on(query.execute(&postgresql_pool)).unwrap();
     }
 }
