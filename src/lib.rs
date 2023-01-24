@@ -338,15 +338,12 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// select.filters(vec![Filter {
 ///     lhs: String::from("foo"),
 ///     operator: Operator::Is,
-///     rhs: SerdeValue::String("{foo}".to_string()),
+///     rhs: json!("{foo}"),
 /// }]);
 /// select.add_filter(Filter {
 ///     lhs: "bar",
 ///     operator: Operator::In,
-///     rhs: SerdeValue::Array(vec![
-///         SerdeValue::String("{val1}".to_string()),
-///         SerdeValue::String("{val2}".to_string()),
-///     ]),
+///     rhs: json!(["{val1}", "{val2}"]),
 /// });
 /// select.order_by(vec![
 ///     ("foo", Direction::Ascending),
@@ -358,7 +355,7 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// select.having(vec![Filter {
 ///     lhs: String::from("COUNT(1)"),
 ///     operator: Operator::GreaterThan,
-///     rhs: SerdeValue::Number(SerdeNumber::from(1)),
+///     rhs: json!(1),
 /// }]);
 /// select.limit(11);
 /// select.offset(50);
