@@ -335,16 +335,8 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// select.select(vec!["foo", r#""a column name with spaces""#]);
 /// select.add_select("bar");
 /// select.add_select("COUNT(1)");
-/// select.filters(vec![Filter {
-///     lhs: String::from("foo"),
-///     operator: Operator::Is,
-///     rhs: json!("{foo}"),
-/// }]);
-/// select.add_filter(Filter {
-///     lhs: "bar",
-///     operator: Operator::In,
-///     rhs: json!(["{val1}", "{val2}"]),
-/// });
+/// select.filters(vec![Filter::new("foo", "is", json!("{foo}")),
+/// select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])));
 /// select.order_by(vec![
 ///     ("foo", Direction::Ascending),
 ///     ("bar", Direction::Descending),
@@ -352,11 +344,7 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// select.group_by(vec!["foo"]);
 /// select.add_group_by(r#""a column name with spaces""#);
 /// select.add_group_by("bar");
-/// select.having(vec![Filter {
-///     lhs: String::from("COUNT(1)"),
-///     operator: Operator::GreaterThan,
-///     rhs: json!(1),
-/// }]);
+/// select.having(vec![Filter::new("COUNT(1)", "gt", json!(1))]);
 /// select.limit(11);
 /// select.offset(50);
 /// assert_eq!(
