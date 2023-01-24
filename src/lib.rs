@@ -771,7 +771,7 @@ pub fn interpolate_sql<S: Into<String>>(
 mod tests {
     use super::*;
     use indoc::indoc;
-    use serde_json::Number as SerdeNumber;
+    use serde_json::json;
     use sqlx::{
         any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
         query as sqlx_query, Row,
@@ -799,9 +799,9 @@ mod tests {
                  AND "col2" = {column}
             "#};
         let mut test_params = HashMap::new();
-        test_params.insert("table", SerdeValue::String("foo".to_string()));
-        test_params.insert("row_num", SerdeValue::Number(SerdeNumber::from(1)));
-        test_params.insert("column", SerdeValue::String("bar".to_string()));
+        test_params.insert("table", json!("foo"));
+        test_params.insert("row_num", json!(1));
+        test_params.insert("column", json!("bar"));
         let (test_sql, test_params) = bind_sql(pool, test_sql, &test_params).unwrap();
         let mut test_query = sqlx_query(&test_sql);
         for param in &test_params {
@@ -949,30 +949,13 @@ mod tests {
         select.select(vec!["foo", r#""a column name with spaces""#]);
         select.add_select("bar");
         select.add_select("COUNT(1)");
-        select.filters(vec![
-            Filter::new("foo", "is", SerdeValue::String("{foo}".to_string())).unwrap()
-        ]);
-        select.add_filter(
-            Filter::new(
-                "bar",
-                "in",
-                SerdeValue::Array(vec![
-                    SerdeValue::String("{val1}".to_string()),
-                    SerdeValue::String("{val2}".to_string()),
-                ]),
-            )
-            .unwrap(),
-        );
+        select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
+        select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
         select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
         select.group_by(vec!["foo"]);
         select.add_group_by(r#""a column name with spaces""#);
         select.add_group_by("bar");
-        select.having(vec![Filter::new(
-            "COUNT(1)",
-            "gt",
-            SerdeValue::Number(SerdeNumber::from(1)),
-        )
-        .unwrap()]);
+        select.having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()]);
         select.limit(11);
         select.offset(50);
 
@@ -1006,9 +989,9 @@ mod tests {
 
             // Bind the SQL and verify the binding:
             let mut param_map = HashMap::new();
-            param_map.insert("foo", SerdeValue::String("foo_val".to_string()));
-            param_map.insert("val1", SerdeValue::String("bar_val1".to_string()));
-            param_map.insert("val2", SerdeValue::String("bar_val2".to_string()));
+            param_map.insert("foo", json!("foo_val"));
+            param_map.insert("val1", json!("bar_val1"));
+            param_map.insert("val2", json!("bar_val2"));
 
             let expected_sql_with_listvars = format!(
                 "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
