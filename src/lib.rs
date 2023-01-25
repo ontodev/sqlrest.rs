@@ -388,9 +388,10 @@ pub struct Select {
 }
 
 impl Select {
-    /// Create a new Select struct with private fields initialized to their default values.
-    pub fn new() -> Select {
-        Default::default()
+    /// Create a new Select struct with the given table name and with its other fields initialized
+    /// to their default values.
+    pub fn new<S: Into<String>>(table: S) -> Select {
+        Select { table: table.into(), ..Default::default() }
     }
 
     /// Clone the given Select struct.
@@ -404,10 +405,6 @@ impl Select {
     /// `select` field, then the columns of the given table are looked up in the database and all
     /// of them are explicitly added to the SELECT statement generated.
     pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
-        if self.table == "" {
-            return Err("Cannot convert Select to SQL: Missing required field: table".to_string());
-        }
-
         let mut select_columns = vec![];
         // If `self.select` is empty, look up the columns corresponding to the table in the db:
         if self.select.is_empty() {
@@ -929,8 +926,7 @@ mod tests {
         // SQL and verify the bindings.
         /////////////////////////////
         // Progressively create a Select object:
-        let mut select = Select::new();
-        select.table(r#""a table name with spaces""#);
+        let mut select = Select::new(r#""a table name with spaces""#);
         select.select(vec!["foo", r#""a column name with spaces""#]);
         select.add_select("bar");
         select.add_select("COUNT(1)");
