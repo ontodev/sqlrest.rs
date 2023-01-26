@@ -44,7 +44,7 @@ impl FromStr for Operator {
 
     /// Given a string representation of an operator, return the corresponding operator. The valid
     /// string representations of the various operators are the following:
-    /// ```
+    /// ```ignore
     /// "eq" => Operator::Equals
     /// "not_eq" => Operator::NotEquals
     /// "lt" => Operator::LessThan
