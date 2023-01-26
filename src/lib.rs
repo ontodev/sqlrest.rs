@@ -1014,30 +1014,17 @@ mod tests {
         /////////////////////////////
         // Combine two selects
         /////////////////////////////
-        let cte = Select {
-            table: String::from("my_table"),
-            select: vec!["prefix".to_string()],
-            filters: vec![],
-            group_by: vec![],
-            having: vec![],
-            order_by: vec![],
-            limit: None,
-            offset: None,
-        };
-        let main_select = Select {
-            table: String::from("cte"),
-            select: vec!["prefix".to_string()],
-            filters: vec![],
-            group_by: vec![],
-            having: vec![],
-            order_by: vec![],
-            limit: Some(10),
-            offset: None,
-        };
+        let mut cte = Select::new("my_table");
+        cte.select(vec!["prefix"]);
+        // Note: When building a Select struct, chaining is possible but you must first create
+        // a mutable struct in a separate statement before before chaining:
+        let mut main_select = Select::new("cte");
+        main_select.select(vec!["prefix"]).limit(10).offset(20);
+
         let sql = selects_to_sql(&cte, &main_select, &postgresql_pool).unwrap();
         assert_eq!(
             sql,
-            "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10",
+            "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10 OFFSET 20",
         );
         let query = sqlx_query(&sql);
         block_on(query.execute(&postgresql_pool)).unwrap();
