@@ -9,6 +9,13 @@ use sqlx::{
 };
 use std::{collections::HashMap, str::FromStr};
 
+/// Representation of a database type. Currently only Postgres and Sqlite are supported.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DbType {
+    Postgres,
+    Sqlite,
+}
+
 /// Representation of an operator of an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Operator {
@@ -28,12 +35,31 @@ pub enum Operator {
     NotIn,
 }
 
+/// Type of error returned in the case of a failure to parse a given string as an operator.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseOperatorError;
 
 impl FromStr for Operator {
     type Err = ParseOperatorError;
 
+    /// Given a string representation of an operator, return the corresponding operator. The valid
+    /// string representations of the various operators are the following:
+    /// ```
+    /// "eq" => Operator::Equals
+    /// "not_eq" => Operator::NotEquals
+    /// "lt" => Operator::LessThan
+    /// "gt" => Operator::GreaterThan
+    /// "lte" => Operator::LessThanEquals
+    /// "gte" => Operator::GreaterThanEquals
+    /// "like" => Operator::Like
+    /// "not_like" => Operator::NotLike
+    /// "ilike" => Operator::ILike
+    /// "not_ilike" => Operator::NotILike
+    /// "is" => Operator::Is
+    /// "not_is" => Operator::IsNot
+    /// "in" => Operator::In
+    /// "not_in" => Operator::NotIn
+    /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "eq" => Ok(Operator::Equals),
@@ -95,9 +121,9 @@ fn render_like_not_like<S: Into<String>>(lhs: S, rhs: S, positive: bool) -> Resu
 /// Given strings representing the left and right hand sides of a filter, render an SQL string
 /// representing a case-insensitve LIKE relation between the lhs and rhs in the case when
 /// `positive` is true, or the negation of such a statement otherwise. The appropriate syntax
-/// will be determined on the basis of the given database connection pool.
+/// will be determined on the basis of the given database type.
 fn render_ilike_not_ilike<S: Into<String>>(
-    pool: &AnyPool,
+    dbtype: &DbType,
     lhs: S,
     rhs: S,
     positive: bool,
@@ -108,7 +134,7 @@ fn render_ilike_not_ilike<S: Into<String>>(
     } else {
         negation = "";
     }
-    if pool.any_kind() == AnyKind::Postgres {
+    if *dbtype == DbType::Postgres {
         Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs.into()))
     } else {
         Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs.into()))
@@ -162,10 +188,10 @@ fn render_in_not_in<S: Into<String>>(
 /// SerdeValue) representing the right hand side, render an SQL string representing the equivalent
 /// of a case-insensitve IS relation between the lhs and rhs in the case when `positive` is true,
 /// or the negation of such a statement otherwise. The appropriate syntax will be determined on the
-/// basis of the given database connection pool. For example, PostgreSQL's IS NOT DISTINCT FROM
-/// is equivalent to SQLite's IS operator, and IS DISTINCT FROM is the same as IS NOT.
+/// basis of the given database type. For example, Postgres's IS NOT DISTINCT FROM is equivalent
+/// to Sqlite's IS operator, and IS DISTINCT FROM is the same as IS NOT.
 fn render_is_not_is<S: Into<String>>(
-    pool: &AnyPool,
+    dbtype: &DbType,
     lhs: S,
     rhs: &SerdeValue,
     positive: bool,
@@ -177,7 +203,7 @@ fn render_is_not_is<S: Into<String>>(
         }
         _ => return Err(format!("{} is neither a string nor a number", rhs)),
     };
-    if pool.any_kind() == AnyKind::Sqlite {
+    if *dbtype == DbType::Sqlite {
         Ok(format!(
             "{} IS{} {}",
             lhs.into(),
@@ -224,10 +250,9 @@ impl Filter {
         Filter { ..filter.clone() }
     }
 
-    /// Use the given database connection pool to convert the given filter into an SQL string
-    /// suitable to be used in a WHERE clause, using the syntax appropriate to the kind of database
-    /// represented by the pool. Currently supported databases are PostgreSQL and SQLite.
-    pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
+    /// Convert the given filter into an SQL string suitable to be used in a WHERE clause, using the
+    /// syntax appropriate to the given database type.
+    pub fn to_sql(&self, dbtype: &DbType) -> Result<String, String> {
         let not_a_string_err = format!("RHS of filter: {:?} is not a string.", self);
         let not_a_string_or_number_err =
             format!("RHS of filter: {:?} is not a string or a number.", self);
@@ -271,15 +296,15 @@ impl Filter {
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
-                SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, true),
+                SerdeValue::String(s) => render_ilike_not_ilike(dbtype, &self.lhs, s, true),
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
-                SerdeValue::String(s) => render_ilike_not_ilike(pool, &self.lhs, s, false),
+                SerdeValue::String(s) => render_ilike_not_ilike(dbtype, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
-            Operator::Is => render_is_not_is(pool, &self.lhs, &self.rhs, true),
-            Operator::IsNot => render_is_not_is(pool, &self.lhs, &self.rhs, false),
+            Operator::Is => render_is_not_is(dbtype, &self.lhs, &self.rhs, true),
+            Operator::IsNot => render_is_not_is(dbtype, &self.lhs, &self.rhs, false),
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, true),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
@@ -292,12 +317,12 @@ impl Filter {
     }
 }
 
-/// Given a list of filters and a database connection pool, convert each filter to an SQL string and
+/// Given a list of filters and a database type, convert each filter to an SQL string and
 /// join them together using the keyword AND.
-pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, String> {
+pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, String> {
     let mut parts: Vec<String> = vec![];
     for filter in filters {
-        match filter.to_sql(pool) {
+        match filter.to_sql(dbtype) {
             Ok(sql) => parts.push(sql),
             Err(err) => return Err(err),
         };
@@ -309,46 +334,44 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 /// A structure to represent an SQL select statement.
 /// Examples:
 /// ```rust,ignore
-/// // Initialise a new Select object using struct syntax. Note that if the select field is empty,
-/// // then the database will be queried when converting the struct to SQL, so as to include all of
-/// // the table's defined columns in the SELECT clause.
-/// let select = Select {
+/// // Initialise a new Select object using struct syntax.
+/// let mut select = Select {
 ///     // When names require quotation marks (e.g. if they contain a space), then these must be
 ///     // supplied by the user:
 ///     table: String::from(r#""my table""#),
 ///     limit: Some(10),
 ///     ..Default::default()
 /// };
-///
+/// // Query the database for the columns of the corresponding table and add them all to the
+/// // `select` field:
+/// select.select_all(&postgresql_pool);
 /// let expected_sql = format!(
 ///     r#"{} {}"#,
 ///     r#"SELECT "my column 1", "my column 2", "my column 3", "my column 4""#,
 ///     r#"FROM "my table" LIMIT 10"#
 /// );
-/// assert_eq!(select.to_sql(&postgresql_pool).unwrap(), expected_sql);
-/// assert_eq!(select.to_sql(&sqlite_pool).unwrap(), expected_sql);
+/// assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
 ///
 /// // Initialise a new Select object by calling new() and then progressively add further
-/// // information.
-/// let mut select = Select::new();
-/// select.table(r#""a table name with spaces""#);
-/// select.select(vec!["foo", r#""a column name with spaces""#]);
-/// select.add_select("bar");
-/// select.add_select("COUNT(1)");
-/// select.filters(vec![Filter::new("foo", "is", json!("{foo}")),
-/// select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])));
-/// select.order_by(vec![
-///     ("foo", Direction::Ascending),
-///     ("bar", Direction::Descending),
-/// ]);
-/// select.group_by(vec!["foo"]);
-/// select.add_group_by(r#""a column name with spaces""#);
-/// select.add_group_by("bar");
-/// select.having(vec![Filter::new("COUNT(1)", "gt", json!(1))]);
-/// select.limit(11);
-/// select.offset(50);
+/// // information. Note that method chaining is possible, as illustrated below, but you must
+/// // first create the struct in a separate statement.
+/// let mut select = Select::new(r#""a table name with spaces""#);
+/// select
+///     .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+///     .filters(vec![
+///         Filter::new("foo", "is", json!("{foo}")).unwrap(),
+///         Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap(),
+///     ])
+///     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+///     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
+///     .having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()])
+///     .limit(11)
+///     .offset(50);
+///
+/// // Note that the convenience methods, `to_sqlite()` and `to_postgres()` may be used instead
+/// // of `to_sql(&DbType::Sqlite)` and `to_sql(&DbType::Postgres)`, respectively.
 /// assert_eq!(
-///     select.to_sql(&postgresql_pool).unwrap(),
+///     select.to_postgres().unwrap(),
 ///     format!(
 ///         "{} {} {} {} {} {} {}",
 ///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
@@ -360,9 +383,8 @@ pub fn filters_to_sql(filters: &Vec<Filter>, pool: &AnyPool) -> Result<String, S
 ///         r#"LIMIT 11 OFFSET 50"#
 ///     )
 /// );
-///
 /// assert_eq!(
-///     select.to_sql(&sqlite_pool).unwrap(),
+///     select.to_sqlite().unwrap(),
 ///     format!(
 ///         "{} {} {} {} {} {} {}",
 ///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
@@ -397,85 +419,6 @@ impl Select {
     /// Clone the given Select struct.
     pub fn clone(select: &Select) -> Select {
         Select { ..select.clone() }
-    }
-
-    /// Given a database connection pool, convert the given Select struct to an SQL statement,
-    /// using the syntax appropriate for the kind of database connected to by the pool. Currently
-    /// supported databases are PostgreSQL and SQLite. If the given Select struct has an empty
-    /// `select` field, then the columns of the given table are looked up in the database and all
-    /// of them are explicitly added to the SELECT statement generated.
-    pub fn to_sql(&self, pool: &AnyPool) -> Result<String, String> {
-        if self.table == "" {
-            return Err("Cannot convert Select to SQL: Missing required field: table".to_string());
-        }
-        let mut select_columns = vec![];
-        // If `self.select` is empty, look up the columns corresponding to the table in the db:
-        if self.select.is_empty() {
-            // We are forcing the user to supply his/her own quotes around table names and column
-            // names, etc. Because of this we need to unquote the table name for the metadata query
-            // below.
-            let unquoted_table = unquote(&self.table).unwrap_or(self.table.clone());
-            let sql;
-            if pool.any_kind() == AnyKind::Postgres {
-                sql = format!(
-                    r#"SELECT "column_name" AS "name"
-                       FROM "information_schema"."columns"
-                       WHERE "table_name" = '{}'
-                       ORDER BY "ordinal_position""#,
-                    unquoted_table,
-                );
-            } else {
-                sql = format!(r#"PRAGMA TABLE_INFO('{}')"#, unquoted_table);
-            }
-            let query = sqlx_query(&sql);
-            let rows = block_on(query.fetch_all(pool)).unwrap();
-            for row in &rows {
-                let cname: &str = row.get("name");
-                select_columns.push(format!(r#""{}""#, cname));
-            }
-        } else {
-            select_columns = self.select.clone();
-        }
-
-        if select_columns.is_empty() {
-            return Err(format!("Could not find any columns for table '{}'", self.table));
-        }
-
-        let select_clause = select_columns.join(", ");
-        let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
-        if !self.filters.is_empty() {
-            let where_clause = match filters_to_sql(&self.filters, &pool) {
-                Err(err) => return Err(err),
-                Ok(s) => s,
-            };
-            sql.push_str(&format!(" WHERE {}", where_clause));
-        }
-        if !self.group_by.is_empty() {
-            sql.push_str(&format!(" GROUP BY {}", self.group_by.join(", ")));
-        }
-        if !self.having.is_empty() {
-            let having_clause = match filters_to_sql(&self.having, &pool) {
-                Err(err) => return Err(err),
-                Ok(s) => s,
-            };
-            sql.push_str(&format!(" HAVING {}", having_clause));
-        }
-        if !self.order_by.is_empty() {
-            sql.push_str(" ORDER BY ");
-            let order_strings = self
-                .order_by
-                .iter()
-                .map(|(col, dir)| format!("{} {}", col, dir.to_sql()))
-                .collect::<Vec<String>>();
-            sql.push_str(&format!("{}", order_strings.join(", ")));
-        }
-        if let Some(limit) = self.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
-        }
-        if let Some(offset) = self.offset {
-            sql.push_str(&format!(" OFFSET {}", offset));
-        }
-        Ok(sql)
     }
 
     /// Given a table name, set `self.table` to that name.
@@ -576,19 +519,115 @@ impl Select {
         self.offset = Some(offset);
         self
     }
+
+    /// Given a database pool, query the database for all of the columns corresponding to the
+    /// `table` field of this Select struct (`self`), and add them to `self`'s `select` field.
+    /// If `self.table` is not defined, return `self` back to the caller unchanged.
+    pub fn select_all(&mut self, pool: &AnyPool) -> &mut Select {
+        if self.table == "" {
+            // If no table has been defined, do nothing.
+            return self;
+        }
+
+        // We are forcing the user to supply his/her own quotes around table names and column
+        // names, etc. Because of this we need to unquote the table name for the metadata query
+        // below.
+        let unquoted_table = unquote(&self.table).unwrap_or(self.table.clone());
+        let sql;
+        if pool.any_kind() == AnyKind::Postgres {
+            sql = format!(
+                r#"SELECT "column_name" AS "name"
+                   FROM "information_schema"."columns"
+                   WHERE "table_name" = '{}'
+                   ORDER BY "ordinal_position""#,
+                unquoted_table,
+            );
+        } else {
+            sql = format!(r#"PRAGMA TABLE_INFO('{}')"#, unquoted_table);
+        }
+        let query = sqlx_query(&sql);
+        let rows = block_on(query.fetch_all(pool)).unwrap();
+        for row in &rows {
+            let cname: &str = row.get("name");
+            self.select.push(format!(r#""{}""#, cname));
+        }
+
+        self
+    }
+
+    /// Given a database type, convert the given Select struct to an SQL statement, using the syntax
+    /// appropriate for the kind of database specified. Returns an Error if `self.table` or
+    /// `self.select` have not been defined.
+    pub fn to_sql(&self, dbtype: &DbType) -> Result<String, String> {
+        if self.table == "" {
+            return Err("Missing required field: `table` in to_sql()".to_string());
+        }
+
+        if self.select.is_empty() {
+            return Err("Missing required field: `select` in to_sql()".to_string());
+        }
+
+        let select_clause = self.select.join(", ");
+        let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
+        if !self.filters.is_empty() {
+            let where_clause = match filters_to_sql(&self.filters, &dbtype) {
+                Err(err) => return Err(err),
+                Ok(s) => s,
+            };
+            sql.push_str(&format!(" WHERE {}", where_clause));
+        }
+        if !self.group_by.is_empty() {
+            sql.push_str(&format!(" GROUP BY {}", self.group_by.join(", ")));
+        }
+        if !self.having.is_empty() {
+            let having_clause = match filters_to_sql(&self.having, &dbtype) {
+                Err(err) => return Err(err),
+                Ok(s) => s,
+            };
+            sql.push_str(&format!(" HAVING {}", having_clause));
+        }
+        if !self.order_by.is_empty() {
+            sql.push_str(" ORDER BY ");
+            let order_strings = self
+                .order_by
+                .iter()
+                .map(|(col, dir)| format!("{} {}", col, dir.to_sql()))
+                .collect::<Vec<String>>();
+            sql.push_str(&format!("{}", order_strings.join(", ")));
+        }
+        if let Some(limit) = self.limit {
+            sql.push_str(&format!(" LIMIT {}", limit));
+        }
+        if let Some(offset) = self.offset {
+            sql.push_str(&format!(" OFFSET {}", offset));
+        }
+        Ok(sql)
+    }
+
+    /// Convert the given Select struct to an SQL statement using Postgres syntax. This is a
+    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Postgres).
+    pub fn to_postgres(&self) -> Result<String, String> {
+        self.to_sql(&DbType::Postgres)
+    }
+
+    /// Convert the given Select struct to an SQL statement using Sqlite syntax. This is a
+    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Sqlite).
+    pub fn to_sqlite(&self) -> Result<String, String> {
+        self.to_sql(&DbType::Sqlite)
+    }
 }
 
-/// Given a database pool and two Select structs, generate an SQL statement such that the
+/// Given a database type and two Select structs, generate an SQL statement such that the
 /// first Select struct is interpreted as a simple CTE, and the second Select struct is
 /// interpreted as the main query.
 pub fn selects_to_sql(
     select1: &Select,
     select2: &Select,
-    pool: &AnyPool,
+    dbtype: &DbType,
 ) -> Result<String, String> {
-    match select1.to_sql(pool) {
+    match select1.to_sql(dbtype) {
         Err(e) => return Err(e),
-        Ok(sql1) => match select2.to_sql(pool) {
+        Ok(sql1) => match select2.to_sql(dbtype) {
             Err(e) => return Err(e),
             Ok(sql2) => return Ok(format!("WITH {} AS ({}) {}", select2.table, sql1, sql2)),
         },
@@ -601,9 +640,9 @@ pub fn selects_to_sql(
 /// returned string by the placeholder corresponding to the type of the database pool.
 /// For example, given a string: "SELECT column FROM table WHERE column IN ({beta}, {alpha})", and
 /// given the parameter map: {"alpha": SqlParam::String("green"), "beta": SqlParam::String("red")},
-/// then in the case of a SQLite database, this function will return the String
+/// then in the case of a Sqlite database, this function will return the String
 /// "SELECT column FROM table WHERE column IN (?, ?)" along with the Vector
-/// [SqlParam::String("red"), SqlParam::String("green")]. In the case of a PostgreSQL database,
+/// [SqlParam::String("red"), SqlParam::String("green")]. In the case of a Postgres database,
 /// the returned vector will be the same but the string will be
 /// "SELECT column FROM table WHERE column IN ($1, $2)".
 pub fn bind_sql<'a, S: Into<String>>(
@@ -702,8 +741,8 @@ pub fn local_sql_syntax<S: Into<String>>(pool: &AnyPool, sql_param: S, sql: S) -
 /// None, then use it to explicitly identify placeholders in `sql`. Otherwise, use `pool` to
 /// determine the placeholder syntax to use for the specific kind of database the SQL is intended
 /// for. VALVE currently supports:
-/// (1) PostgreSQL, which uses numbered variables $N, e.g., SELECT 1 FROM foo WHERE bar IN ($1, $2)
-/// (2) SQLite, which uses question marks, e.g., SELECT 1 FROM foo WHERE bar IN (?, ?)
+/// (1) Postgres, which uses numbered variables $N, e.g., SELECT 1 FROM foo WHERE bar IN ($1, $2)
+/// (2) Sqlite, which uses question marks, e.g., SELECT 1 FROM foo WHERE bar IN (?, ?)
 pub fn interpolate_sql<S: Into<String>>(
     pool: &AnyPool,
     sql: S,
@@ -901,7 +940,7 @@ mod tests {
 
         /////////////////////////////
         // Create a Select object using struct syntax and convert it to an SQL string, testing both
-        // PostgreSQL and SQLite:
+        // Postgres and Sqlite:
         /////////////////////////////
         let select = Select {
             table: String::from("my_table"),
@@ -920,12 +959,12 @@ mod tests {
             r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
             "FROM my_table LIMIT 10"
         );
-        assert_eq!(select.to_sql(&postgresql_pool).unwrap(), expected_sql);
-        assert_eq!(select.to_sql(&sqlite_pool).unwrap(), expected_sql);
+        assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
+        assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
 
         /////////////////////////////
         // Create a Select object by initializing an empty object, progressively add subclauses,
-        // and then convert it to an SQL string, in PostgreSQL and SQLIte syntax. Finally, bind the
+        // and then convert it to an SQL string, in Postgres and SQLIte syntax. Finally, bind the
         // SQL and verify the bindings.
         /////////////////////////////
         // Progressively create a Select object:
@@ -943,7 +982,7 @@ mod tests {
         select.limit(11);
         select.offset(50);
 
-        // Convert the Select to SQL in both PostgreSQL and SQLite:
+        // Convert the Select to SQL in both Postgres and Sqlite:
         for pool in vec![&postgresql_pool, &sqlite_pool] {
             let (is_clause, placeholder1, placeholder2, placeholder3);
             if pool.any_kind() == AnyKind::Postgres {
@@ -968,7 +1007,12 @@ mod tests {
                  LIMIT 11 OFFSET 50",
                 is_clause,
             );
-            let sql = select.to_sql(&pool).unwrap();
+            let sql;
+            if pool.any_kind() == AnyKind::Postgres {
+                sql = select.to_sql(&DbType::Postgres).unwrap();
+            } else {
+                sql = select.to_sql(&DbType::Sqlite).unwrap();
+            }
             assert_eq!(expected_sql_with_mapvars, sql);
 
             // Bind the SQL and verify the binding:
@@ -1024,7 +1068,7 @@ mod tests {
         let mut main_select = Select::new("cte");
         main_select.select(vec!["prefix"]).limit(10).offset(20);
 
-        let sql = selects_to_sql(&cte, &main_select, &postgresql_pool).unwrap();
+        let sql = selects_to_sql(&cte, &main_select, &DbType::Postgres).unwrap();
         assert_eq!(
             sql,
             "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10 OFFSET 20",
