@@ -44,22 +44,20 @@ impl FromStr for Operator {
 
     /// Given a string representation of an operator, return the corresponding operator. The valid
     /// string representations of the various operators are the following:
-    /// ```ignore
-    /// "eq" => Operator::Equals
-    /// "not_eq" => Operator::NotEquals
-    /// "lt" => Operator::LessThan
-    /// "gt" => Operator::GreaterThan
-    /// "lte" => Operator::LessThanEquals
-    /// "gte" => Operator::GreaterThanEquals
-    /// "like" => Operator::Like
-    /// "not_like" => Operator::NotLike
-    /// "ilike" => Operator::ILike
-    /// "not_ilike" => Operator::NotILike
-    /// "is" => Operator::Is
-    /// "not_is" => Operator::IsNot
-    /// "in" => Operator::In
-    /// "not_in" => Operator::NotIn
-    /// ```
+    /// * "eq" => Operator::Equals
+    /// * "not_eq" => Operator::NotEquals
+    /// * "lt" => Operator::LessThan
+    /// * "gt" => Operator::GreaterThan
+    /// * "lte" => Operator::LessThanEquals
+    /// * "gte" => Operator::GreaterThanEquals
+    /// * "like" => Operator::Like
+    /// * "not_like" => Operator::NotLike
+    /// * "ilike" => Operator::ILike
+    /// * "not_ilike" => Operator::NotILike
+    /// * "is" => Operator::Is
+    /// * "not_is" => Operator::IsNot
+    /// * "in" => Operator::In
+    /// * "not_in" => Operator::NotIn
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "eq" => Ok(Operator::Equals),
