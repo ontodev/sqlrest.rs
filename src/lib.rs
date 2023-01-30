@@ -115,132 +115,6 @@ pub struct Filter {
     rhs: SerdeValue,
 }
 
-/// Given strings representing the left and right hand sides of a filter, render an SQL string
-/// of the form 'lhs LIKE rhs' when the `positive` flag is true, and 'lhs NOT LIKE rhs' otherwise.
-fn render_like_not_like<S: Into<String>>(lhs: S, rhs: S, positive: bool) -> Result<String, String> {
-    let negation;
-    if !positive {
-        negation = " NOT";
-    } else {
-        negation = "";
-    }
-    Ok(format!("{}{} LIKE {}", lhs.into(), negation, rhs.into()))
-}
-
-/// Given strings representing the left and right hand sides of a filter, render an SQL string
-/// representing a case-insensitve LIKE relation between the lhs and rhs in the case when
-/// `positive` is true, or the negation of such a statement otherwise. The appropriate syntax
-/// will be determined on the basis of the given database type.
-fn render_ilike_not_ilike<S: Into<String>>(
-    dbtype: &DbType,
-    lhs: S,
-    rhs: S,
-    positive: bool,
-) -> Result<String, String> {
-    let negation;
-    if !positive {
-        negation = " NOT";
-    } else {
-        negation = "";
-    }
-    if *dbtype == DbType::Postgres {
-        Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs.into()))
-    } else {
-        Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs.into()))
-    }
-}
-
-/// Given a string representing the left hand side of a filter, and a vector of options representing
-/// the right hand side, render an SQL string expressing an IN relation between lhs and rhs when
-/// `positive` is true, or a NOT IN relation otherwise.
-fn render_in_not_in<S: Into<String>>(
-    lhs: S,
-    options: &Vec<SerdeValue>,
-    positive: bool,
-) -> Result<String, String> {
-    let negation;
-    if !positive {
-        negation = " NOT";
-    } else {
-        negation = "";
-    }
-
-    let mut values = vec![];
-    let mut is_string_list = false;
-    for (i, option) in options.iter().enumerate() {
-        match option {
-            SerdeValue::String(s) => {
-                if i == 0 {
-                    is_string_list = true;
-                } else if !is_string_list {
-                    return Err(format!("{:?} contains both text and numeric types.", options));
-                }
-                values.push(format!("{}", s))
-            }
-            SerdeValue::Number(n) => {
-                if i == 0 {
-                    is_string_list = false;
-                } else if is_string_list {
-                    return Err(format!("{:?} contains both text and numeric types.", options));
-                }
-                values.push(format!("{}", n))
-            }
-            _ => return Err(format!("{:?} is not an array of strings or numbers.", options)),
-        };
-    }
-    let value_list = format!("({})", values.join(", "));
-    let filter_sql = format!("{}{} IN {}", lhs.into(), negation, value_list);
-    Ok(filter_sql)
-}
-
-/// Given a string representing the left hand side of a filter, a string or number (encoded as a
-/// SerdeValue) representing the right hand side, render an SQL string representing the equivalent
-/// of a case-insensitve IS relation between the lhs and rhs in the case when `positive` is true,
-/// or the negation of such a statement otherwise. The appropriate syntax will be determined on the
-/// basis of the given database type. For example, Postgres's IS NOT DISTINCT FROM is equivalent
-/// to Sqlite's IS operator, and IS DISTINCT FROM is the same as IS NOT.
-fn render_is_not_is<S: Into<String>>(
-    dbtype: &DbType,
-    lhs: S,
-    rhs: &SerdeValue,
-    positive: bool,
-) -> Result<String, String> {
-    let value = match rhs {
-        SerdeValue::String(s) => s.to_string(),
-        SerdeValue::Number(n) => {
-            format!("{}", n)
-        }
-        _ => return Err(format!("{} is neither a string nor a number", rhs)),
-    };
-    if *dbtype == DbType::Sqlite {
-        Ok(format!(
-            "{} IS{} {}",
-            lhs.into(),
-            {
-                if positive {
-                    ""
-                } else {
-                    " NOT"
-                }
-            },
-            value
-        ))
-    } else {
-        Ok(format!(
-            "{} IS{} DISTINCT FROM {}",
-            lhs.into(),
-            {
-                if positive {
-                    " NOT"
-                } else {
-                    ""
-                }
-            },
-            value
-        ))
-    }
-}
-
 impl Filter {
     /// Given a left hand side, a right hand side, and an operator, create a new filter.
     pub fn new<S: Into<String>>(
@@ -257,6 +131,138 @@ impl Filter {
     /// Clone the given filter.
     pub fn clone(filter: &Filter) -> Filter {
         Filter { ..filter.clone() }
+    }
+
+    /// Given strings representing the left and right hand sides of a filter, render an SQL string
+    /// of the form 'lhs LIKE rhs' when the `positive` flag is true, and 'lhs NOT LIKE rhs'
+    /// otherwise.
+    fn render_like_not_like<S: Into<String>>(
+        lhs: S,
+        rhs: S,
+        positive: bool,
+    ) -> Result<String, String> {
+        let negation;
+        if !positive {
+            negation = " NOT";
+        } else {
+            negation = "";
+        }
+        Ok(format!("{}{} LIKE {}", lhs.into(), negation, rhs.into()))
+    }
+
+    /// Given strings representing the left and right hand sides of a filter, render an SQL string
+    /// representing a case-insensitve LIKE relation between the lhs and rhs in the case when
+    /// `positive` is true, or the negation of such a statement otherwise. The appropriate syntax
+    /// will be determined on the basis of the given database type.
+    fn render_ilike_not_ilike<S: Into<String>>(
+        dbtype: &DbType,
+        lhs: S,
+        rhs: S,
+        positive: bool,
+    ) -> Result<String, String> {
+        let negation;
+        if !positive {
+            negation = " NOT";
+        } else {
+            negation = "";
+        }
+        if *dbtype == DbType::Postgres {
+            Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs.into()))
+        } else {
+            Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs.into()))
+        }
+    }
+
+    /// Given a string representing the left hand side of a filter, and a vector of options
+    /// representing the right hand side, render an SQL string expressing an IN relation between lhs
+    /// and rhs when `positive` is true, or a NOT IN relation otherwise.
+    fn render_in_not_in<S: Into<String>>(
+        lhs: S,
+        options: &Vec<SerdeValue>,
+        positive: bool,
+    ) -> Result<String, String> {
+        let negation;
+        if !positive {
+            negation = " NOT";
+        } else {
+            negation = "";
+        }
+
+        let mut values = vec![];
+        let mut is_string_list = false;
+        for (i, option) in options.iter().enumerate() {
+            match option {
+                SerdeValue::String(s) => {
+                    if i == 0 {
+                        is_string_list = true;
+                    } else if !is_string_list {
+                        return Err(format!("{:?} contains both text and numeric types.", options));
+                    }
+                    values.push(format!("{}", s))
+                }
+                SerdeValue::Number(n) => {
+                    if i == 0 {
+                        is_string_list = false;
+                    } else if is_string_list {
+                        return Err(format!("{:?} contains both text and numeric types.", options));
+                    }
+                    values.push(format!("{}", n))
+                }
+                _ => return Err(format!("{:?} is not an array of strings or numbers.", options)),
+            };
+        }
+        let value_list = format!("({})", values.join(", "));
+        let filter_sql = format!("{}{} IN {}", lhs.into(), negation, value_list);
+        Ok(filter_sql)
+    }
+
+    /// Given a string representing the left hand side of a filter, a string or number (encoded as a
+    /// SerdeValue) representing the right hand side, render an SQL string representing the
+    /// equivalent of a case-insensitve IS relation between the lhs and rhs in the case when
+    /// `positive` is true, or the negation of such a statement otherwise. The appropriate syntax
+    /// will be determined on the basis of the given database type. For example, Postgres's IS NOT
+    /// DISTINCT FROM is equivalent to Sqlite's IS operator, and IS DISTINCT FROM is the same as IS
+    /// NOT.
+    fn render_is_not_is<S: Into<String>>(
+        dbtype: &DbType,
+        lhs: S,
+        rhs: &SerdeValue,
+        positive: bool,
+    ) -> Result<String, String> {
+        let value = match rhs {
+            SerdeValue::String(s) => s.to_string(),
+            SerdeValue::Number(n) => {
+                format!("{}", n)
+            }
+            _ => return Err(format!("{} is neither a string nor a number", rhs)),
+        };
+        if *dbtype == DbType::Sqlite {
+            Ok(format!(
+                "{} IS{} {}",
+                lhs.into(),
+                {
+                    if positive {
+                        ""
+                    } else {
+                        " NOT"
+                    }
+                },
+                value
+            ))
+        } else {
+            Ok(format!(
+                "{} IS{} DISTINCT FROM {}",
+                lhs.into(),
+                {
+                    if positive {
+                        " NOT"
+                    } else {
+                        ""
+                    }
+                },
+                value
+            ))
+        }
     }
 
     /// Convert the given filter into an SQL string suitable to be used in a WHERE clause, using the
@@ -297,29 +303,29 @@ impl Filter {
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::Like => match &self.rhs {
-                SerdeValue::String(s) => render_like_not_like(&self.lhs, s, true),
+                SerdeValue::String(s) => Self::render_like_not_like(&self.lhs, s, true),
                 _ => Err(not_a_string_err),
             },
             Operator::NotLike => match &self.rhs {
-                SerdeValue::String(s) => render_like_not_like(&self.lhs, s, false),
+                SerdeValue::String(s) => Self::render_like_not_like(&self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
-                SerdeValue::String(s) => render_ilike_not_ilike(dbtype, &self.lhs, s, true),
+                SerdeValue::String(s) => Self::render_ilike_not_ilike(dbtype, &self.lhs, s, true),
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
-                SerdeValue::String(s) => render_ilike_not_ilike(dbtype, &self.lhs, s, false),
+                SerdeValue::String(s) => Self::render_ilike_not_ilike(dbtype, &self.lhs, s, false),
                 _ => Err(not_a_string_err),
             },
-            Operator::Is => render_is_not_is(dbtype, &self.lhs, &self.rhs, true),
-            Operator::IsNot => render_is_not_is(dbtype, &self.lhs, &self.rhs, false),
+            Operator::Is => Self::render_is_not_is(dbtype, &self.lhs, &self.rhs, true),
+            Operator::IsNot => Self::render_is_not_is(dbtype, &self.lhs, &self.rhs, false),
             Operator::In => match &self.rhs {
-                SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, true),
+                SerdeValue::Array(options) => Self::render_in_not_in(&self.lhs, options, true),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
             Operator::NotIn => match &self.rhs {
-                SerdeValue::Array(options) => render_in_not_in(&self.lhs, options, false),
+                SerdeValue::Array(options) => Self::render_in_not_in(&self.lhs, options, false),
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
         }
