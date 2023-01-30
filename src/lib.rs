@@ -16,6 +16,17 @@ pub enum DbType {
     Sqlite,
 }
 
+/// Given a database connection pool, return the corresponding DbType.
+pub fn get_db_type(pool: &AnyPool) -> Result<DbType, String> {
+    if pool.any_kind() == AnyKind::Postgres {
+        Ok(DbType::Postgres)
+    } else if pool.any_kind() == AnyKind::Sqlite {
+        Ok(DbType::Sqlite)
+    } else {
+        Err(format!("Unsupported database type: {:?}", pool.any_kind()))
+    }
+}
+
 /// Representation of an operator of an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Operator {
@@ -543,6 +554,9 @@ impl Select {
         } else {
             sql = format!(r#"PRAGMA TABLE_INFO('{}')"#, unquoted_table);
         }
+        // Clear the current contents of the select field:
+        self.select.clear();
+        // Add all of the columns returned by the query above to the select field:
         let query = sqlx_query(&sql);
         let rows = block_on(query.fetch_all(pool)).unwrap();
         for row in &rows {
@@ -1005,12 +1019,8 @@ mod tests {
                  LIMIT 11 OFFSET 50",
                 is_clause,
             );
-            let sql;
-            if pool.any_kind() == AnyKind::Postgres {
-                sql = select.to_sql(&DbType::Postgres).unwrap();
-            } else {
-                sql = select.to_sql(&DbType::Sqlite).unwrap();
-            }
+            let dbtype = get_db_type(&pool).unwrap();
+            let sql = select.to_sql(&dbtype).unwrap();
             assert_eq!(expected_sql_with_mapvars, sql);
 
             // Bind the SQL and verify the binding:
