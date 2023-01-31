@@ -4,7 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as SerdeValue;
 use sqlx::{
-    any::{AnyKind, AnyPool},
+    any::{AnyKind, AnyPool, AnyRow},
     query as sqlx_query, Row,
 };
 use std::{collections::HashMap, str::FromStr};
@@ -538,10 +538,10 @@ impl Select {
     /// Given a database pool, query the database for all of the columns corresponding to the
     /// `table` field of this Select struct (`self`), and add them to `self`'s `select` field.
     /// If `self.table` is not defined, return `self` back to the caller unchanged.
-    pub fn select_all(&mut self, pool: &AnyPool) -> &mut Select {
+    pub fn select_all(&mut self, pool: &AnyPool) -> Result<&mut Select, String> {
         if self.table == "" {
             // If no table has been defined, do nothing.
-            return self;
+            return Ok(self);
         }
 
         // We are forcing the user to supply his/her own quotes around table names and column
@@ -570,7 +570,7 @@ impl Select {
             self.select.push(format!(r#""{}""#, cname));
         }
 
-        self
+        Ok(self)
     }
 
     /// Given a database type, convert the given Select struct to an SQL statement, using the syntax
@@ -634,13 +634,48 @@ impl Select {
         self.to_sql(&DbType::Sqlite)
     }
 
-    /// TODO: Add docstring here.
-    pub fn fetch_rows(&self, pool: &AnyPool) {
-        // TODO: To be implemented.
+    /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
+    /// execute the resulting query against the database, and return the resulting rows.
+    pub fn fetch_rows(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<Vec<AnyRow>, String> {
+        let dbtype = get_db_type(pool);
+        if let Err(e) = dbtype {
+            return Err(e);
+        }
+        let dbtype = dbtype.unwrap();
+
+        let sql = self.to_sql(&dbtype);
+        if let Err(e) = sql {
+            return Err(e);
+        }
+        let sql = sql.unwrap();
+
+        let bind_result = bind_sql(pool, sql, param_map);
+        if let Err(e) = bind_result {
+            return Err(e);
+        }
+        let (sql, param_vec) = bind_result.unwrap();
+
+        let mut query = sqlx_query(&sql);
+        for param in &param_vec {
+            match param {
+                SerdeValue::String(s) => query = query.bind(s),
+                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                _ => panic!("{} is not a string or a number.", param),
+            };
+        }
+
+        match block_on(query.fetch_all(pool)) {
+            Err(e) => Err(format!("{}", e)),
+            Ok(k) => Ok(k),
+        }
     }
 
     /// TODO: Add docstring here.
-    pub fn fetch_rows_as_json(&self, pool: &AnyPool) {
+    pub fn fetch_rows_as_json(&self, _pool: &AnyPool, _param_map: &HashMap<&str, SerdeValue>) {
         // TODO: To be implemented.
     }
 }
@@ -956,8 +991,11 @@ mod tests {
                                  "ontology IRI" TEXT,
                                  "version IRI" TEXT
                                )"#;
-        let insert_table1a = r#"INSERT INTO "my_table" VALUES (1, 'p1', 'b1', 'o1', 'v1')"#;
-        let insert_table1b = r#"INSERT INTO "my_table" VALUES (2, 'p2', 'b2', 'o2', 'v2')"#;
+        let insert_table1 = r#"INSERT INTO "my_table" VALUES
+                                (1, 'p1', 'b1', 'o1', 'v1'),
+                                (2, 'p2', 'b2', 'o2', 'v2'),
+                                (3, 'p3', 'b3', 'o3', 'v3'),
+                                (4, 'p4', 'b4', 'o1', 'v4')"#;
 
         let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
         let create_table2 = r#"CREATE TABLE "a table name with spaces" (
@@ -965,19 +1003,21 @@ mod tests {
                                  "a column name with spaces" TEXT,
                                  "bar" TEXT
                                )"#;
-        let insert_table2a = r#"INSERT INTO "a table name with spaces" VALUES ('f1', 'a1', 'b1')"#;
-        let insert_table2b = r#"INSERT INTO "a table name with spaces" VALUES ('f2', 'a2', 'b2')"#;
-
+        let insert_table2 = r#"INSERT INTO "a table name with spaces" VALUES
+                                ('f1', 's1', 'b1'),
+                                ('f2', 's2', 'b2'),
+                                ('f3', 's3', 'b3'),
+                                ('f4', 's4', 'b4'),
+                                ('f5', 's5', 'b5'),
+                                ('f6', 's6', 'b6')"#;
         for pool in vec![&sqlite_pool, &postgresql_pool] {
             for sql in &vec![
                 drop_table1,
                 create_table1,
-                insert_table1a,
-                insert_table1b,
+                insert_table1,
                 drop_table2,
                 create_table2,
-                insert_table2a,
-                insert_table2b,
+                insert_table2,
             ] {
                 let query = sqlx_query(sql);
                 block_on(query.execute(pool)).unwrap();
@@ -1140,7 +1180,33 @@ mod tests {
     #[test]
     #[serial]
     fn select_to_rows() {
-        // TODO: To be implemented.
+        fn validate_rows(rows: &Vec<AnyRow>) {
+            let num_rows = rows.len();
+            for (i, row) in rows.iter().enumerate() {
+                let foo: &str = row.get("foo");
+                let spaces: &str = row.get("a column name with spaces");
+                let bar: &str = row.get("bar");
+                assert_eq!(foo.to_string(), format!("f{}", num_rows - i));
+                assert_eq!(spaces.to_string(), format!("s{}", num_rows - i));
+                assert_eq!(bar.to_string(), format!("b{}", num_rows - i));
+            }
+        }
+
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+        let mut select = Select::new(r#""a table name with spaces""#);
+        select
+            .select_all(&sqlite_pool)
+            .expect("")
+            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+            .order_by(vec![("foo", Direction::Descending)]);
+
+        let mut param_map = HashMap::new();
+        param_map.insert("foo1", json!("f5"));
+        param_map.insert("foo2", json!("f6"));
+        let rows = select.fetch_rows(&sqlite_pool, &param_map).unwrap();
+        validate_rows(&rows);
+        let rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
+        validate_rows(&rows);
     }
 
     #[test]
