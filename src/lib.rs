@@ -633,6 +633,16 @@ impl Select {
     pub fn to_sqlite(&self) -> Result<String, String> {
         self.to_sql(&DbType::Sqlite)
     }
+
+    /// TODO: Add docstring here.
+    pub fn fetch_rows(&self, pool: &AnyPool) {
+        // TODO: To be implemented.
+    }
+
+    /// TODO: Add docstring here.
+    pub fn fetch_rows_as_json(&self, pool: &AnyPool) {
+        // TODO: To be implemented.
+    }
 }
 
 /// Given a database type and two Select structs, generate an SQL statement such that the
