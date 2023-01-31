@@ -824,6 +824,7 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use serde_json::json;
+    use serial_test::serial;
     use sqlx::{
         any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
         query as sqlx_query, Row,
@@ -889,6 +890,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sqlite_bind_execute_interpolate_sql() {
         let connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
         let pool =
@@ -898,6 +900,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sqlite_localise_interpolate_sql() {
         let connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
         let pool =
@@ -909,6 +912,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn postgres_bind_execute_interpolate_sql() {
         let connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
@@ -919,6 +923,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn postgres_localise_interpolate_sql() {
         let connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
@@ -930,8 +935,7 @@ mod tests {
         assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN ($1, $2, $3)", local_sql);
     }
 
-    #[test]
-    fn select() {
+    fn setup_for_select_test() -> (AnyPool, AnyPool) {
         // Setup database connections and create the needed tables:
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
@@ -944,7 +948,7 @@ mod tests {
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
                 .unwrap();
 
-        let drop_table1 = "DROP TABLE IF EXISTS my_table";
+        let drop_table1 = r#"DROP TABLE IF EXISTS "my_table""#;
         let create_table1 = r#"CREATE TABLE "my_table" (
                                  "row_number" BIGINT,
                                  "prefix" TEXT,
@@ -952,20 +956,40 @@ mod tests {
                                  "ontology IRI" TEXT,
                                  "version IRI" TEXT
                                )"#;
+        let insert_table1a = r#"INSERT INTO "my_table" VALUES (1, 'p1', 'b1', 'o1', 'v1')"#;
+        let insert_table1b = r#"INSERT INTO "my_table" VALUES (2, 'p2', 'b2', 'o2', 'v2')"#;
+
         let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
         let create_table2 = r#"CREATE TABLE "a table name with spaces" (
                                  "foo" TEXT,
                                  "a column name with spaces" TEXT,
                                  "bar" TEXT
                                )"#;
+        let insert_table2a = r#"INSERT INTO "a table name with spaces" VALUES ('f1', 'a1', 'b1')"#;
+        let insert_table2b = r#"INSERT INTO "a table name with spaces" VALUES ('f2', 'a2', 'b2')"#;
 
         for pool in vec![&sqlite_pool, &postgresql_pool] {
-            for sql in vec![drop_table1, create_table1, drop_table2, create_table2] {
+            for sql in &vec![
+                drop_table1,
+                create_table1,
+                insert_table1a,
+                insert_table1b,
+                drop_table2,
+                create_table2,
+                insert_table2a,
+                insert_table2b,
+            ] {
                 let query = sqlx_query(sql);
                 block_on(query.execute(pool)).unwrap();
             }
         }
 
+        (sqlite_pool, postgresql_pool)
+    }
+
+    #[test]
+    #[serial]
+    fn select_to_sql() {
         /////////////////////////////
         // Create a Select object using struct syntax and convert it to an SQL string, testing both
         // Postgres and Sqlite:
@@ -989,6 +1013,12 @@ mod tests {
         );
         assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
         assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
+    }
+
+    #[test]
+    #[serial]
+    fn select_to_sql_and_execute() {
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 
         /////////////////////////////
         // Create a Select object by initializing an empty object, progressively add subclauses,
@@ -1012,14 +1042,14 @@ mod tests {
 
         // Convert the Select to SQL in both Postgres and Sqlite:
         for pool in vec![&postgresql_pool, &sqlite_pool] {
-            let (is_clause, placeholder1, placeholder2, placeholder3);
+            let (expected_is_clause, placeholder1, placeholder2, placeholder3);
             if pool.any_kind() == AnyKind::Postgres {
-                is_clause = "IS NOT DISTINCT FROM";
+                expected_is_clause = "IS NOT DISTINCT FROM";
                 placeholder1 = "$1";
                 placeholder2 = "$2";
                 placeholder3 = "$3";
             } else {
-                is_clause = "IS";
+                expected_is_clause = "IS";
                 placeholder1 = "?";
                 placeholder2 = "?";
                 placeholder3 = "?";
@@ -1033,7 +1063,7 @@ mod tests {
                  HAVING COUNT(1) > 1 \
                  ORDER BY foo ASC, bar DESC \
                  LIMIT 11 OFFSET 50",
-                is_clause,
+                expected_is_clause,
             );
             let dbtype = get_db_type(&pool).unwrap();
             let sql = select.to_sql(&dbtype).unwrap();
@@ -1053,7 +1083,7 @@ mod tests {
                  HAVING COUNT(1) > 1 \
                  ORDER BY foo ASC, bar DESC \
                  LIMIT 11 OFFSET 50",
-                is_clause, placeholder1, placeholder2, placeholder3,
+                expected_is_clause, placeholder1, placeholder2, placeholder3,
             );
             let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
             assert_eq!(expected_sql_with_listvars, sql);
@@ -1081,6 +1111,12 @@ mod tests {
             }
             block_on(query.execute(pool)).unwrap();
         }
+    }
+
+    #[test]
+    #[serial]
+    fn selects_to_sql_and_execute() {
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 
         /////////////////////////////
         // Combine two selects
@@ -1097,7 +1133,19 @@ mod tests {
             sql,
             "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10 OFFSET 20",
         );
-        let query = sqlx_query(&sql);
-        block_on(query.execute(&postgresql_pool)).unwrap();
+        block_on(sqlx_query(&sql).execute(&sqlite_pool)).unwrap();
+        block_on(sqlx_query(&sql).execute(&postgresql_pool)).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn select_to_rows() {
+        // TODO: To be implemented.
+    }
+
+    #[test]
+    #[serial]
+    fn select_to_json_rows() {
+        // TODO: To be implemented.
     }
 }
