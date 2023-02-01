@@ -636,10 +636,14 @@ impl Select {
 
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the resulting rows.
-    pub fn fetch_rows(
+    /// If `as_json` is set to true, the appropriate database function will be used to aggregate the
+    /// result set as a single AnyRow with a single field called "row" containing a JSON-formatted
+    /// string.
+    fn execute_select(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
+        as_json: bool,
     ) -> Result<Vec<AnyRow>, String> {
         let dbtype = get_db_type(pool);
         if let Err(e) = dbtype {
@@ -652,6 +656,13 @@ impl Select {
             return Err(e);
         }
         let sql = sql.unwrap();
+        let sql = if !as_json {
+            sql
+        } else if dbtype == DbType::Sqlite {
+            return Err("Sqlite not implemented yet.".to_string());
+        } else {
+            format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
+        };
 
         let bind_result = bind_sql(pool, sql, param_map);
         if let Err(e) = bind_result {
@@ -674,9 +685,45 @@ impl Select {
         }
     }
 
-    /// TODO: Add docstring here.
-    pub fn fetch_rows_as_json(&self, _pool: &AnyPool, _param_map: &HashMap<&str, SerdeValue>) {
-        // TODO: To be implemented.
+    /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
+    /// execute the resulting query against the database, and return the resulting rows.
+    pub fn fetch_rows(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<Vec<AnyRow>, String> {
+        self.execute_select(pool, param_map, false)
+    }
+
+    /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
+    /// execute the resulting query against the database, and return the resulting rows as JSON
+    /// (i.e., as a SerdeValue).
+    pub fn fetch_rows_as_json(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<SerdeValue, String> {
+        let rows = self.execute_select(pool, param_map, true);
+        if let Err(e) = rows {
+            return Err(e);
+        }
+        let mut rows = rows.unwrap();
+
+        if rows.len() != 1 {
+            return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
+        }
+        let row = rows.pop().unwrap();
+
+        let json_row = row.try_get("row");
+        if let Err(e) = json_row {
+            return Err(format!("{}", e));
+        }
+        let json_row = json_row.unwrap();
+
+        match serde_json::from_str::<SerdeValue>(json_row) {
+            Err(e) => Err(format!("{}", e)),
+            Ok(json_row) => Ok(json_row),
+        }
     }
 }
 
@@ -1211,7 +1258,62 @@ mod tests {
 
     #[test]
     #[serial]
-    fn select_to_json_rows() {
-        // TODO: To be implemented.
+    fn select_to_json_rows_postgres() {
+        let (_, postgresql_pool) = setup_for_select_test();
+        let mut select = Select::new(r#""a table name with spaces""#);
+        select
+            .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+            .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+            .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
+            .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
+            .limit(10)
+            .offset(1);
+
+        let mut param_map = HashMap::new();
+        param_map.insert("foo1", json!("f5"));
+        param_map.insert("foo2", json!("f6"));
+
+        let json_row = select.fetch_rows_as_json(&postgresql_pool, &param_map).unwrap();
+        let mut expected_json_row = String::from("[");
+        expected_json_row
+            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","count":1},"#);
+        expected_json_row
+            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","count":1},"#);
+        expected_json_row
+            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","count":1}"#);
+        expected_json_row.push_str("]");
+        assert_eq!(format!("{}", json_row), expected_json_row);
+    }
+
+    #[ignore] // TODO: unignore this test once fetch_rows_as_json() is implemented for SQLite.
+    #[test]
+    #[serial]
+    fn select_to_json_rows_sqlite() {
+        let (sqlite_pool, _) = setup_for_select_test();
+        let mut select = Select::new(r#""a table name with spaces""#);
+        select
+            .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+            .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+            .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
+            .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
+            .limit(10)
+            .offset(1);
+
+        let mut param_map = HashMap::new();
+        param_map.insert("foo1", json!("f5"));
+        param_map.insert("foo2", json!("f6"));
+
+        let json_row = select.fetch_rows_as_json(&sqlite_pool, &param_map).unwrap();
+        let mut expected_json_row = String::from("[");
+        expected_json_row
+            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","count":1},"#);
+        expected_json_row
+            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","count":1},"#);
+        expected_json_row
+            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","count":1}"#);
+        expected_json_row.push_str("]");
+        assert_eq!(format!("{}", json_row), expected_json_row);
     }
 }
