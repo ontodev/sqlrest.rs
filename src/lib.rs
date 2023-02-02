@@ -659,7 +659,13 @@ impl Select {
         let sql = if !as_json {
             sql
         } else if dbtype == DbType::Sqlite {
-            return Err("Sqlite not implemented yet.".to_string());
+            let mut json_keys = vec![];
+            for column in &self.select {
+                let unquoted_column = unquote(&column).unwrap_or(column.clone());
+                json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
+            }
+            let json_select = json_keys.join(", ");
+            format!("SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})", json_select, sql)
         } else {
             format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
         };
@@ -736,12 +742,12 @@ pub fn selects_to_sql(
     dbtype: &DbType,
 ) -> Result<String, String> {
     match select1.to_sql(dbtype) {
-        Err(e) => return Err(e),
+        Err(e) => Err(e),
         Ok(sql1) => match select2.to_sql(dbtype) {
-            Err(e) => return Err(e),
-            Ok(sql2) => return Ok(format!("WITH {} AS ({}) {}", select2.table, sql1, sql2)),
+            Err(e) => Err(e),
+            Ok(sql2) => Ok(format!("WITH {} AS ({}) {}", select2.table, sql1, sql2)),
         },
-    };
+    }
 }
 
 /// Given a database pool and a SQL string containing a number of placeholders, `{key}`, where `key`
@@ -1286,7 +1292,6 @@ mod tests {
         assert_eq!(format!("{}", json_row), expected_json_row);
     }
 
-    #[ignore] // TODO: unignore this test once fetch_rows_as_json() is implemented for SQLite.
     #[test]
     #[serial]
     fn select_to_json_rows_sqlite() {
@@ -1308,11 +1313,11 @@ mod tests {
         let json_row = select.fetch_rows_as_json(&sqlite_pool, &param_map).unwrap();
         let mut expected_json_row = String::from("[");
         expected_json_row
-            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","count":1},"#);
+            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","COUNT(1)":1},"#);
         expected_json_row
-            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","count":1},"#);
+            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","COUNT(1)":1},"#);
         expected_json_row
-            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","count":1}"#);
+            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","COUNT(1)":1}"#);
         expected_json_row.push_str("]");
         assert_eq!(format!("{}", json_row), expected_json_row);
     }
