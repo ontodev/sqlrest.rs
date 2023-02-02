@@ -798,7 +798,7 @@ pub fn fetch_rows_as_json_from_selects(
     pool: &AnyPool,
     param_map: &HashMap<&str, SerdeValue>,
 ) -> Result<SerdeValue, String> {
-    // Construct the query:
+    // Construct the SQL:
     let dbtype = get_db_type(&pool);
     let sql = match dbtype {
         Err(e) => return Err(e),
@@ -823,7 +823,7 @@ pub fn fetch_rows_as_json_from_selects(
         },
     };
 
-    // Execute the query:
+    // Prepare the query using the given parameter map::
     let (sql, params) = match bind_sql(pool, sql, param_map) {
         Err(e) => return Err(e),
         Ok((sql, params)) => (sql, params),
@@ -837,7 +837,7 @@ pub fn fetch_rows_as_json_from_selects(
         };
     }
 
-    // Extract the JSON row and return it:
+    // Execute the query, extract the JSON row and return it:
     match block_on(query.fetch_all(pool)) {
         Err(e) => Err(format!("{}", e)),
         Ok(rows) if rows.len() != 1 => {
