@@ -670,7 +670,7 @@ impl Select {
             format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
         };
 
-        let bind_result = bind_sql(pool, sql, param_map);
+        let bind_result = bind_sql(pool, &sql, param_map);
         if let Err(e) = bind_result {
             return Err(e);
         }
@@ -681,7 +681,7 @@ impl Select {
             match param {
                 SerdeValue::String(s) => query = query.bind(s),
                 SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                _ => panic!("{} is not a string or a number.", param),
+                _ => return Err(format!("{} is not a string or a number.", param)),
             };
         }
 
@@ -747,6 +747,112 @@ pub fn selects_to_sql(
             Err(e) => Err(e),
             Ok(sql2) => Ok(format!("WITH {} AS ({}) {}", select2.table, sql1, sql2)),
         },
+    }
+}
+
+/// Given two Select structs, a database connection pool, and a parameter map: Generate a SQL
+/// statement such that the first Select struct is interpreted as a simple CTE, and the second
+/// Select struct is interpreted as the main query; then bind the SQL to the parameter map,
+/// execute the resulting query against the database, and return the resulting rows.
+pub fn fetch_rows_from_selects(
+    select1: &Select,
+    select2: &Select,
+    pool: &AnyPool,
+    param_map: &HashMap<&str, SerdeValue>,
+) -> Result<Vec<AnyRow>, String> {
+    let dbtype = get_db_type(&pool);
+    let sql = match dbtype {
+        Err(e) => return Err(e),
+        Ok(dbtype) => match selects_to_sql(select1, select2, &dbtype) {
+            Err(e) => return Err(e),
+            Ok(sql) => sql,
+        },
+    };
+    let (sql, params) = match bind_sql(pool, sql, param_map) {
+        Err(e) => return Err(e),
+        Ok((sql, params)) => (sql, params),
+    };
+    let mut query = sqlx_query(&sql);
+    for param in params {
+        match param {
+            SerdeValue::String(s) => query = query.bind(s),
+            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+            _ => return Err(format!("{} is not a string or a number.", param)),
+        };
+    }
+
+    match block_on(query.fetch_all(pool)) {
+        Err(e) => Err(format!("{}", e)),
+        Ok(k) => Ok(k),
+    }
+}
+
+/// Given two Select structs, a database connection pool, and a parameter map: Generate a SQL
+/// statement such that the first Select struct is interpreted as a simple CTE, and the second
+/// Select struct is interpreted as the main query; then bind the SQL to the parameter map,
+/// execute the resulting query against the database, and return the resulting rows as a JSON
+/// (i.e., as a SerdeValue).
+pub fn fetch_rows_as_json_from_selects(
+    select1: &Select,
+    select2: &Select,
+    pool: &AnyPool,
+    param_map: &HashMap<&str, SerdeValue>,
+) -> Result<SerdeValue, String> {
+    // Construct the query:
+    let dbtype = get_db_type(&pool);
+    let sql = match dbtype {
+        Err(e) => return Err(e),
+        Ok(dbtype) => match selects_to_sql(select1, select2, &dbtype) {
+            Err(e) => return Err(e),
+            Ok(sql) => {
+                if dbtype == DbType::Sqlite {
+                    let mut json_keys = vec![];
+                    for column in &select2.select {
+                        let unquoted_column = unquote(&column).unwrap_or(column.clone());
+                        json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
+                    }
+                    let json_select = json_keys.join(", ");
+                    format!(
+                        "SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})",
+                        json_select, sql
+                    )
+                } else {
+                    format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
+                }
+            }
+        },
+    };
+
+    // Execute the query:
+    let (sql, params) = match bind_sql(pool, sql, param_map) {
+        Err(e) => return Err(e),
+        Ok((sql, params)) => (sql, params),
+    };
+    let mut query = sqlx_query(&sql);
+    for param in params {
+        match param {
+            SerdeValue::String(s) => query = query.bind(s),
+            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+            _ => return Err(format!("{} is not a string or a number.", param)),
+        };
+    }
+
+    // Extract the JSON row and return it:
+    match block_on(query.fetch_all(pool)) {
+        Err(e) => Err(format!("{}", e)),
+        Ok(rows) if rows.len() != 1 => {
+            Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()))
+        }
+        Ok(mut rows) => {
+            let row = rows.pop().unwrap();
+            match row.try_get("row") {
+                Err(e) => Err(format!("{}", e)),
+                Ok(json_row) => match serde_json::from_str::<SerdeValue>(json_row) {
+                    Err(e) => Err(format!("{}", e)),
+                    Ok(json_row) => Ok(json_row),
+                },
+            }
+        }
     }
 }
 
@@ -1083,10 +1189,6 @@ mod tests {
     #[test]
     #[serial]
     fn select_to_sql() {
-        /////////////////////////////
-        // Create a Select object using struct syntax and convert it to an SQL string, testing both
-        // Postgres and Sqlite:
-        /////////////////////////////
         let select = Select {
             table: String::from("my_table"),
             select: vec![
@@ -1112,13 +1214,6 @@ mod tests {
     #[serial]
     fn select_to_sql_and_execute() {
         let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-
-        /////////////////////////////
-        // Create a Select object by initializing an empty object, progressively add subclauses,
-        // and then convert it to an SQL string, in Postgres and SQLIte syntax. Finally, bind the
-        // SQL and verify the bindings.
-        /////////////////////////////
-        // Progressively create a Select object:
         let mut select = Select::new(r#""a table name with spaces""#);
         select.select(vec!["foo", r#""a column name with spaces""#]);
         select.add_select("bar");
@@ -1210,10 +1305,6 @@ mod tests {
     #[serial]
     fn selects_to_sql_and_execute() {
         let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-
-        /////////////////////////////
-        // Combine two selects
-        /////////////////////////////
         let mut cte = Select::new("my_table");
         cte.select(vec!["prefix"]);
         // Note: When building a Select struct, chaining is possible but you must first create
@@ -1264,8 +1355,8 @@ mod tests {
 
     #[test]
     #[serial]
-    fn select_to_json_rows_postgres() {
-        let (_, postgresql_pool) = setup_for_select_test();
+    fn select_to_json_rows() {
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
         let mut select = Select::new(r#""a table name with spaces""#);
         select
             .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
@@ -1280,45 +1371,68 @@ mod tests {
         param_map.insert("foo1", json!("f5"));
         param_map.insert("foo2", json!("f6"));
 
-        let json_row = select.fetch_rows_as_json(&postgresql_pool, &param_map).unwrap();
-        let mut expected_json_row = String::from("[");
-        expected_json_row
-            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","count":1},"#);
-        expected_json_row
-            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","count":1},"#);
-        expected_json_row
-            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","count":1}"#);
-        expected_json_row.push_str("]");
-        assert_eq!(format!("{}", json_row), expected_json_row);
+        for pool in vec![postgresql_pool, sqlite_pool] {
+            let json_row = select.fetch_rows_as_json(&pool, &param_map).unwrap();
+            let mut expected_json_row = String::from("[");
+            let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
+            expected_json_row.push_str(&format!(
+                r#"{{"foo":"f2","a column name with spaces":"s2","bar":"b2","{}":1}},"#,
+                count
+            ));
+            expected_json_row.push_str(&format!(
+                r#"{{"foo":"f3","a column name with spaces":"s3","bar":"b3","{}":1}},"#,
+                count
+            ));
+            expected_json_row.push_str(&format!(
+                r#"{{"foo":"f4","a column name with spaces":"s4","bar":"b4","{}":1}}"#,
+                count
+            ));
+            expected_json_row.push_str("]");
+            assert_eq!(format!("{}", json_row), expected_json_row);
+        }
     }
 
     #[test]
     #[serial]
-    fn select_to_json_rows_sqlite() {
-        let (sqlite_pool, _) = setup_for_select_test();
-        let mut select = Select::new(r#""a table name with spaces""#);
-        select
-            .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
-            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-            .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
-            .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
-            .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
+    fn selects_to_rows() {
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+        let mut cte = Select::new("my_table");
+        cte.select(vec!["prefix"]);
+        let mut main_select = Select::new("cte");
+        main_select
+            .select(vec!["prefix"])
             .limit(10)
-            .offset(1);
+            .offset(0)
+            .add_order_by(("prefix", Direction::Ascending));
+        for pool in vec![sqlite_pool, postgresql_pool] {
+            let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
+            for (i, row) in rows.iter().enumerate() {
+                let prefix: &str = row.get("prefix");
+                assert_eq!(prefix.to_string(), format!("p{}", i + 1));
+            }
+        }
+    }
 
-        let mut param_map = HashMap::new();
-        param_map.insert("foo1", json!("f5"));
-        param_map.insert("foo2", json!("f6"));
-
-        let json_row = select.fetch_rows_as_json(&sqlite_pool, &param_map).unwrap();
-        let mut expected_json_row = String::from("[");
-        expected_json_row
-            .push_str(r#"{"foo":"f2","a column name with spaces":"s2","bar":"b2","COUNT(1)":1},"#);
-        expected_json_row
-            .push_str(r#"{"foo":"f3","a column name with spaces":"s3","bar":"b3","COUNT(1)":1},"#);
-        expected_json_row
-            .push_str(r#"{"foo":"f4","a column name with spaces":"s4","bar":"b4","COUNT(1)":1}"#);
-        expected_json_row.push_str("]");
-        assert_eq!(format!("{}", json_row), expected_json_row);
+    #[test]
+    #[serial]
+    fn selects_to_json_rows() {
+        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+        let mut cte = Select::new("my_table");
+        cte.select(vec!["prefix"]);
+        let mut main_select = Select::new("cte");
+        main_select
+            .select(vec!["prefix"])
+            .limit(10)
+            .offset(0)
+            .add_order_by(("prefix", Direction::Ascending));
+        for pool in vec![sqlite_pool, postgresql_pool] {
+            let json_row =
+                fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
+                    .unwrap();
+            assert_eq!(
+                format!("{}", json_row),
+                r#"[{"prefix":"p1"},{"prefix":"p2"},{"prefix":"p3"},{"prefix":"p4"}]"#
+            );
+        }
     }
 }
