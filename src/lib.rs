@@ -725,7 +725,7 @@ impl Select {
             return Err(e.to_string());
         }
         let json_row: &str = json_row.unwrap();
-        extract_rows_from_json(json_row)
+        extract_rows_from_json_str(json_row)
     }
 }
 
@@ -785,7 +785,7 @@ pub fn fetch_rows_from_selects(
 
 /// Given a JSON-formatted string representing an array of objects such that each object represents
 /// a row, unwrap the objects and add them to a vector which is then returned to the caller.
-fn extract_rows_from_json(json_row: &str) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
+fn extract_rows_from_json_str(json_row: &str) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
     let mut rows = vec![];
     match serde_json::from_str::<SerdeValue>(json_row) {
         Err(e) => return Err(e.to_string()),
@@ -864,7 +864,7 @@ pub fn fetch_rows_as_json_from_selects(
             let row = rows.pop().unwrap();
             match row.try_get("row") {
                 Err(e) => Err(format!("{}", e)),
-                Ok(json_row) => extract_rows_from_json(json_row),
+                Ok(json_row) => extract_rows_from_json_str(json_row),
             }
         }
     }
