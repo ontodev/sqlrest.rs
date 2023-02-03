@@ -2,7 +2,7 @@ use enquote::unquote;
 use futures::executor::block_on;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as SerdeValue;
+use serde_json::{Map as SerdeMap, Value as SerdeValue};
 use sqlx::{
     any::{AnyKind, AnyPool, AnyRow},
     query as sqlx_query, Row,
@@ -708,7 +708,7 @@ impl Select {
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
-    ) -> Result<SerdeValue, String> {
+    ) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
         let rows = self.execute_select(pool, param_map, true);
         if let Err(e) = rows {
             return Err(e);
@@ -722,14 +722,26 @@ impl Select {
 
         let json_row = row.try_get("row");
         if let Err(e) = json_row {
-            return Err(format!("{}", e));
+            return Err(e.to_string());
         }
         let json_row = json_row.unwrap();
 
+        let mut results = vec![];
         match serde_json::from_str::<SerdeValue>(json_row) {
-            Err(e) => Err(format!("{}", e)),
-            Ok(json_row) => Ok(json_row),
-        }
+            Err(e) => return Err(e.to_string()),
+            Ok(json_row) => match json_row {
+                SerdeValue::Array(json_row) => {
+                    for json_cell in json_row {
+                        match json_cell {
+                            SerdeValue::Object(json_cell) => results.push(json_cell),
+                            _ => return Err(format!("Expected object. Got: {}", json_cell)),
+                        };
+                    }
+                }
+                _ => return Err(format!("Expected array. Got: {}", json_row)),
+            },
+        };
+        Ok(results)
     }
 }
 
@@ -1372,23 +1384,17 @@ mod tests {
         param_map.insert("foo2", json!("f6"));
 
         for pool in vec![postgresql_pool, sqlite_pool] {
-            let json_row = select.fetch_rows_as_json(&pool, &param_map).unwrap();
-            let mut expected_json_row = String::from("[");
+            let json_rows = select.fetch_rows_as_json(&pool, &param_map).unwrap();
             let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
-            expected_json_row.push_str(&format!(
-                r#"{{"foo":"f2","a column name with spaces":"s2","bar":"b2","{}":1}},"#,
-                count
-            ));
-            expected_json_row.push_str(&format!(
-                r#"{{"foo":"f3","a column name with spaces":"s3","bar":"b3","{}":1}},"#,
-                count
-            ));
-            expected_json_row.push_str(&format!(
-                r#"{{"foo":"f4","a column name with spaces":"s4","bar":"b4","{}":1}}"#,
-                count
-            ));
-            expected_json_row.push_str("]");
-            assert_eq!(format!("{}", json_row), expected_json_row);
+            for (i, row) in json_rows.iter().enumerate() {
+                let i = i + 2;
+                let expected_row = format!(
+                    r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
+                    i, i, i, count
+                );
+                let row = SerdeValue::Object(row.clone());
+                assert_eq!(format!("{}", row), expected_row)
+            }
         }
     }
 
