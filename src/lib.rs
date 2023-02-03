@@ -724,24 +724,8 @@ impl Select {
         if let Err(e) = json_row {
             return Err(e.to_string());
         }
-        let json_row = json_row.unwrap();
-
-        let mut results = vec![];
-        match serde_json::from_str::<SerdeValue>(json_row) {
-            Err(e) => return Err(e.to_string()),
-            Ok(json_row) => match json_row {
-                SerdeValue::Array(json_row) => {
-                    for json_cell in json_row {
-                        match json_cell {
-                            SerdeValue::Object(json_cell) => results.push(json_cell),
-                            _ => return Err(format!("Expected object. Got: {}", json_cell)),
-                        };
-                    }
-                }
-                _ => return Err(format!("Expected array. Got: {}", json_row)),
-            },
-        };
-        Ok(results)
+        let json_row: &str = json_row.unwrap();
+        extract_rows_from_json(json_row)
     }
 }
 
@@ -799,6 +783,27 @@ pub fn fetch_rows_from_selects(
     }
 }
 
+/// Given a JSON-formatted string representing an array of objects such that each object represents
+/// a row, unwrap the objects and add them to a vector which is then returned to the caller.
+fn extract_rows_from_json(json_row: &str) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
+    let mut rows = vec![];
+    match serde_json::from_str::<SerdeValue>(json_row) {
+        Err(e) => return Err(e.to_string()),
+        Ok(json_row) => match json_row {
+            SerdeValue::Array(json_row) => {
+                for json_cell in json_row {
+                    match json_cell {
+                        SerdeValue::Object(json_cell) => rows.push(json_cell),
+                        _ => return Err(format!("Expected object. Got: {}", json_cell)),
+                    };
+                }
+            }
+            _ => return Err(format!("Expected array. Got: {}", json_row)),
+        },
+    };
+    Ok(rows)
+}
+
 /// Given two Select structs, a database connection pool, and a parameter map: Generate a SQL
 /// statement such that the first Select struct is interpreted as a simple CTE, and the second
 /// Select struct is interpreted as the main query; then bind the SQL to the parameter map,
@@ -809,7 +814,7 @@ pub fn fetch_rows_as_json_from_selects(
     select2: &Select,
     pool: &AnyPool,
     param_map: &HashMap<&str, SerdeValue>,
-) -> Result<SerdeValue, String> {
+) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
     // Construct the SQL:
     let dbtype = get_db_type(&pool);
     let sql = match dbtype {
@@ -859,10 +864,7 @@ pub fn fetch_rows_as_json_from_selects(
             let row = rows.pop().unwrap();
             match row.try_get("row") {
                 Err(e) => Err(format!("{}", e)),
-                Ok(json_row) => match serde_json::from_str::<SerdeValue>(json_row) {
-                    Err(e) => Err(format!("{}", e)),
-                    Ok(json_row) => Ok(json_row),
-                },
+                Ok(json_row) => extract_rows_from_json(json_row),
             }
         }
     }
@@ -1432,13 +1434,15 @@ mod tests {
             .offset(0)
             .add_order_by(("prefix", Direction::Ascending));
         for pool in vec![sqlite_pool, postgresql_pool] {
-            let json_row =
+            let json_rows =
                 fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
                     .unwrap();
-            assert_eq!(
-                format!("{}", json_row),
-                r#"[{"prefix":"p1"},{"prefix":"p2"},{"prefix":"p3"},{"prefix":"p4"}]"#
-            );
+            for (i, row) in json_rows.iter().enumerate() {
+                let i = i + 1;
+                let expected_row = format!(r#"{{"prefix":"p{}"}}"#, i);
+                let row = SerdeValue::Object(row.clone());
+                assert_eq!(format!("{}", row), expected_row)
+            }
         }
     }
 }
