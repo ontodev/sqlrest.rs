@@ -1,3 +1,389 @@
+//! SQLRest.rs
+//!
+//! # Examples
+//! ```rust
+//! use ontodev_sqlrest::{
+//!     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
+//!     interpolate_sql, local_sql_syntax, DbType, Direction, Filter, Select, selects_to_sql,
+//! };
+//! use futures::executor::block_on;
+//! use indoc::indoc;
+//! use serde_json::{json, Value as SerdeValue};
+//! use sqlx::{
+//!     any::AnyKind,
+//! #     any::{AnyConnectOptions, AnyPool, AnyPoolOptions, AnyRow},
+//!     query as sqlx_query, Row,
+//! };
+//! use std::{
+//!     collections::HashMap,
+//! #   str::FromStr
+//! };
+//! # let connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
+//! # let sqlite_pool =
+//! #     block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
+//! #         .unwrap();
+//!
+//! # let connection_options = AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+//! # let postgresql_pool =
+//! #     block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
+//! #         .unwrap();
+//! /*
+//!  * Use the local_sql_syntax() function to convert a SQL string with the given placeholder
+//!  * to the syntax appropriate to the given database connection pool.
+//!  */
+//! let generic_sql = r#"SELECT "foo" FROM "bar" WHERE "xyzzy" IN (VAL, VAL, VAL)"#;
+//! let local_sql = local_sql_syntax(&sqlite_pool, "VAL", generic_sql);
+//! assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN (?, ?, ?)", local_sql);
+//! let local_sql = local_sql_syntax(&postgresql_pool, "VAL", generic_sql);
+//! assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN ($1, $2, $3)", local_sql);
+//!
+//! /*
+//!  * Initialise a Select struct using struct syntax.
+//!  */
+//! let select = Select {
+//!     table: String::from("my_table"),
+//!     select: vec![
+//!         "row_number".to_string(),
+//!         "prefix".to_string(),
+//!         "base".to_string(),
+//!         r#""ontology IRI""#.to_string(),
+//!         r#""version IRI""#.to_string(),
+//!     ],
+//!     limit: Some(10),
+//!     ..Default::default()
+//! };
+//! let expected_sql = format!(
+//!     r#"{} {}"#,
+//!     r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
+//!     "FROM my_table LIMIT 10"
+//! );
+//! assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
+//! assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
+//!
+//! # for pool in vec![&sqlite_pool, &postgresql_pool] {
+//! # let drop_query = sqlx_query(r#"DROP TABLE IF EXISTS "test""#);
+//! # block_on(drop_query.execute(pool)).unwrap();
+//! # let create_query = sqlx_query(
+//! #     r#"CREATE TABLE "test" ("table" TEXT, "row_num" BIGINT, "col1" TEXT, "col2" TEXT)"#,
+//! # );
+//! # block_on(create_query.execute(pool)).unwrap();
+//! # let insert_query = sqlx_query(r#"INSERT INTO "test" VALUES ('foo', 1, 'bar', 'bar')"#);
+//! # block_on(insert_query.execute(pool)).unwrap();
+//! /*
+//!  * Use the bind_sql() function to bind a given parameter map to a given SQL string, then call
+//!  * interpolate_sql() on the bound SQL and parameter vector that are returned. Finally, create a
+//!  * sqlx_query with the bound SQL and parameter vector and execute it.
+//!  */
+//! let test_sql = indoc! {r#"
+//!        SELECT "table", "row_num", "col1", "col2"
+//!        FROM "test"
+//!        WHERE "table" = {table}
+//!          AND "row_num" = {row_num}
+//!          AND "col1" = {column}
+//!          AND "col2" = {column}
+//!     "#};
+//! let mut test_params = HashMap::new();
+//! test_params.insert("table", json!("foo"));
+//! test_params.insert("row_num", json!(1));
+//! test_params.insert("column", json!("bar"));
+//! let (bound_sql, test_params) = bind_sql(pool, test_sql, &test_params).unwrap();
+//!
+//! let interpolated_sql = interpolate_sql(pool, &bound_sql, &test_params, None).unwrap();
+//! assert_eq!(
+//!     indoc! {r#"
+//!        SELECT "table", "row_num", "col1", "col2"
+//!        FROM "test"
+//!        WHERE "table" = 'foo'
+//!          AND "row_num" = 1
+//!          AND "col1" = 'bar'
+//!          AND "col2" = 'bar'
+//!     "#},
+//!     interpolated_sql
+//! );
+//!
+//! let mut test_query = sqlx_query(&bound_sql);
+//! for param in &test_params {
+//!     match param {
+//!         SerdeValue::String(s) => test_query = test_query.bind(s),
+//!         SerdeValue::Number(n) => test_query = test_query.bind(n.as_i64()),
+//!         _ => panic!("{} is not a string or a number.", param),
+//!     };
+//! }
+//! let row = block_on(test_query.fetch_one(pool)).unwrap();
+//! # let table: &str = row.get("table");
+//! # assert_eq!(table, "foo");
+//! # let row_num: i64 = row.get("row_num");
+//! # assert_eq!(row_num, 1);
+//! # let col1: &str = row.get("col1");
+//! # assert_eq!(col1, "bar");
+//! # let col2: &str = row.get("col2");
+//! # assert_eq!(col2, "bar");
+//! # }
+//! # fn setup_for_select_test() -> (AnyPool, AnyPool) {
+//! #     // Setup database connections and create the needed tables:
+//! #     let pg_connection_options =
+//! #         AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+//! #     let postgresql_pool =
+//! #         block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+//! #             .unwrap();
+//! #     let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
+//! #     let sqlite_pool =
+//! #         block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+//! #             .unwrap();
+//! #     let drop_table1 = r#"DROP TABLE IF EXISTS "my_table""#;
+//! #     let create_table1 = r#"CREATE TABLE "my_table" (
+//! #                              "row_number" BIGINT,
+//! #                              "prefix" TEXT,
+//! #                              "base" TEXT,
+//! #                              "ontology IRI" TEXT,
+//! #                              "version IRI" TEXT
+//! #                            )"#;
+//! #     let insert_table1 = r#"INSERT INTO "my_table" VALUES
+//! #                             (1, 'p1', 'b1', 'o1', 'v1'),
+//! #                             (2, 'p2', 'b2', 'o2', 'v2'),
+//! #                             (3, 'p3', 'b3', 'o3', 'v3'),
+//! #                             (4, 'p4', 'b4', 'o1', 'v4')"#;
+//! #     let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
+//! #     let create_table2 = r#"CREATE TABLE "a table name with spaces" (
+//! #                              "foo" TEXT,
+//! #                              "a column name with spaces" TEXT,
+//! #                              "bar" TEXT
+//! #                            )"#;
+//! #     let insert_table2 = r#"INSERT INTO "a table name with spaces" VALUES
+//! #                             ('f1', 's1', 'b1'),
+//! #                             ('f2', 's2', 'b2'),
+//! #                             ('f3', 's3', 'b3'),
+//! #                             ('f4', 's4', 'b4'),
+//! #                             ('f5', 's5', 'b5'),
+//! #                             ('f6', 's6', 'b6')"#;
+//! #     for pool in vec![&sqlite_pool, &postgresql_pool] {
+//! #         for sql in &vec![
+//! #             drop_table1,
+//! #             create_table1,
+//! #             insert_table1,
+//! #             drop_table2,
+//! #             create_table2,
+//! #             insert_table2,
+//! #         ] {
+//! #             let query = sqlx_query(sql);
+//! #             block_on(query.execute(pool)).unwrap();
+//! #         }
+//! #     }
+//! #     (sqlite_pool, postgresql_pool)
+//! # }
+//!
+//! /*
+//!  * Create a new Select struct by calling new() and progressively adding fields.
+//!  */
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//! let mut select = Select::new(r#""a table name with spaces""#);
+//! select.select(vec!["foo", r#""a column name with spaces""#]);
+//! select.add_select("bar");
+//! select.add_select("COUNT(1)");
+//! select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
+//! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
+//! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
+//! select.group_by(vec!["foo"]);
+//! select.add_group_by(r#""a column name with spaces""#);
+//! select.add_group_by("bar");
+//! select.having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()]);
+//! select.limit(11);
+//! select.offset(50);
+//!
+//! /*
+//!  * Convert the Select defined above to SQL for both Postgres and Sqlite, bind the SQL using
+//!  * bind_sql(), and then create and execure a sqlx_query using the bound SQL and parameter
+//!  * vector that are returned.
+//!  */
+//! for pool in vec![&postgresql_pool, &sqlite_pool] {
+//!     let (expected_is_clause, placeholder1, placeholder2, placeholder3);
+//!     if pool.any_kind() == AnyKind::Postgres {
+//!         expected_is_clause = "IS NOT DISTINCT FROM";
+//!         placeholder1 = "$1";
+//!         placeholder2 = "$2";
+//!         placeholder3 = "$3";
+//!     } else {
+//!         expected_is_clause = "IS";
+//!         placeholder1 = "?";
+//!         placeholder2 = "?";
+//!         placeholder3 = "?";
+//!     }
+//!
+//!     let expected_sql_with_mapvars = format!(
+//!         "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+//!          FROM \"a table name with spaces\" \
+//!          WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
+//!          GROUP BY foo, \"a column name with spaces\", bar \
+//!          HAVING COUNT(1) > 1 \
+//!          ORDER BY foo ASC, bar DESC \
+//!          LIMIT 11 OFFSET 50",
+//!         expected_is_clause,
+//!     );
+//!     let dbtype = get_db_type(&pool).unwrap();
+//!     let sql = select.to_sql(&dbtype).unwrap();
+//!     assert_eq!(expected_sql_with_mapvars, sql);
+//!
+//!     let mut param_map = HashMap::new();
+//!     param_map.insert("foo", json!("foo_val"));
+//!     param_map.insert("val1", json!("bar_val1"));
+//!     param_map.insert("val2", json!("bar_val2"));
+//!
+//!     let expected_sql_with_listvars = format!(
+//!         "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+//!          FROM \"a table name with spaces\" \
+//!          WHERE foo {} {} AND bar IN ({}, {}) \
+//!          GROUP BY foo, \"a column name with spaces\", bar \
+//!          HAVING COUNT(1) > 1 \
+//!          ORDER BY foo ASC, bar DESC \
+//!          LIMIT 11 OFFSET 50",
+//!         expected_is_clause, placeholder1, placeholder2, placeholder3,
+//!     );
+//!     let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
+//!     assert_eq!(expected_sql_with_listvars, sql);
+//!     # match params[0] {
+//!     #     SerdeValue::String(s) if s == "foo_val" => assert!(true),
+//!     #     _ => assert!(false, "{} != 'foo_val'", params[0]),
+//!     # };
+//!     # match params[1] {
+//!     #     SerdeValue::String(s) if s == "bar_val1" => assert!(true),
+//!     #     _ => assert!(false, "{} != 'bar_val1'", params[1]),
+//!     # };
+//!     # match params[2] {
+//!     #     SerdeValue::String(s) if s == "bar_val2" => assert!(true),
+//!     #     _ => assert!(false, "{} != 'bar_val2'", params[2]),
+//!     # };
+//!     let mut query = sqlx_query(&sql);
+//!     for param in &params {
+//!         match param {
+//!             SerdeValue::String(s) => query = query.bind(s),
+//!             SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+//!             _ => panic!("{} is not a string or a number.", param),
+//!         };
+//!     }
+//!     block_on(query.execute(pool)).unwrap();
+//! }
+//!
+//! /*
+//!  * Generate the SQL for a simple combined query.
+//!  */
+//! let mut cte = Select::new("my_table");
+//! cte.select(vec!["prefix"]);
+//! // Note: When building a Select struct, chaining is possible but you must first create
+//! // a mutable struct in a separate statement using new() before before chaining:
+//! let mut main_select = Select::new("cte");
+//! main_select.select(vec!["prefix"]).limit(10).offset(20);
+//!
+//! let sql = selects_to_sql(&cte, &main_select, &DbType::Postgres).unwrap();
+//! assert_eq!(
+//!     sql,
+//!     "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10 OFFSET 20",
+//! );
+//! block_on(sqlx_query(&sql).execute(&sqlite_pool)).unwrap();
+//! block_on(sqlx_query(&sql).execute(&postgresql_pool)).unwrap();
+//! # fn validate_rows(rows: &Vec<AnyRow>) {
+//! #     let num_rows = rows.len();
+//! #     for (i, row) in rows.iter().enumerate() {
+//! #         let foo: &str = row.get("foo");
+//! #         let spaces: &str = row.get("a column name with spaces");
+//! #         let bar: &str = row.get("bar");
+//! #         assert_eq!(foo.to_string(), format!("f{}", num_rows - i));
+//! #         assert_eq!(spaces.to_string(), format!("s{}", num_rows - i));
+//! #         assert_eq!(bar.to_string(), format!("b{}", num_rows - i));
+//! #     }
+//! # }
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//! /*
+//!  * Fetch database rows using Select::fetch_rows().
+//!  */
+//! let mut select = Select::new(r#""a table name with spaces""#);
+//! select
+//!     .select_all(&sqlite_pool)
+//!     .expect("")
+//!     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+//!     .order_by(vec![("foo", Direction::Descending)]);
+//!
+//! let mut param_map = HashMap::new();
+//! param_map.insert("foo1", json!("f5"));
+//! param_map.insert("foo2", json!("f6"));
+//! let sqlite_rows = select.fetch_rows(&sqlite_pool, &param_map).unwrap();
+//! # validate_rows(&sqlite_rows);
+//! let postgresql_rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
+//! # validate_rows(&postgresql_rows);
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//!
+//! /*
+//!  * Fetch database rows in JSON format using Select::fetch_rows_as_json().
+//!  */
+//! let mut select = Select::new(r#""a table name with spaces""#);
+//! select
+//!     .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+//!     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+//!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+//!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
+//!     .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
+//!     .limit(10)
+//!     .offset(1);
+//!
+//! let mut param_map = HashMap::new();
+//! param_map.insert("foo1", json!("f5"));
+//! param_map.insert("foo2", json!("f6"));
+//! for pool in vec![postgresql_pool, sqlite_pool] {
+//!     let json_rows = select.fetch_rows_as_json(&pool, &param_map).unwrap();
+//!     # let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
+//!     # for (i, row) in json_rows.iter().enumerate() {
+//!     #     let i = i + 2;
+//!     #     let expected_row = format!(
+//!     #         r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
+//!     #         i, i, i, count
+//!     #     );
+//!     #     let row = SerdeValue::Object(row.clone());
+//!     #     assert_eq!(format!("{}", row), expected_row)
+//!     # }
+//! }
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//! /*
+//!  * Fetch rows from a combined query.
+//!  */
+//! let mut cte = Select::new("my_table");
+//! cte.select(vec!["prefix"]);
+//! let mut main_select = Select::new("cte");
+//! main_select
+//!     .select(vec!["prefix"])
+//!     .limit(10)
+//!     .offset(0)
+//!     .add_order_by(("prefix", Direction::Ascending));
+//! for pool in vec![sqlite_pool, postgresql_pool] {
+//!     let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
+//!     # for (i, row) in rows.iter().enumerate() {
+//!     #     let prefix: &str = row.get("prefix");
+//!     #     assert_eq!(prefix.to_string(), format!("p{}", i + 1));
+//!     # }
+//! }
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//! /*
+//!  * Fetch rows as json from a combined query.
+//!  */
+//! let mut cte = Select::new("my_table");
+//! cte.select(vec!["prefix"]);
+//! let mut main_select = Select::new("cte");
+//! main_select
+//!     .select(vec!["prefix"])
+//!     .limit(10)
+//!     .offset(0)
+//!     .add_order_by(("prefix", Direction::Ascending));
+//! for pool in vec![sqlite_pool, postgresql_pool] {
+//!     let json_rows =
+//!         fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
+//!             .unwrap();
+//!     # for (i, row) in json_rows.iter().enumerate() {
+//!     #     let i = i + 1;
+//!     #     let expected_row = format!(r#"{{"prefix":"p{}"}}"#, i);
+//!     #     let row = SerdeValue::Object(row.clone());
+//!     #     assert_eq!(format!("{}", row), expected_row)
+//!     # }
+//! }
+//! ```
+
 use enquote::unquote;
 use futures::executor::block_on;
 use regex::Regex;
@@ -28,7 +414,7 @@ pub fn get_db_type(pool: &AnyPool) -> Result<DbType, String> {
 }
 
 /// Representation of an operator of an SQL query.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Operator {
     Equals,
     NotEquals,
@@ -268,6 +654,8 @@ impl Filter {
     /// Convert the given filter into an SQL string suitable to be used in a WHERE clause, using the
     /// syntax appropriate to the given database type.
     pub fn to_sql(&self, dbtype: &DbType) -> Result<String, String> {
+        // Note that we only check the rhs below since the lhs is guaranteed to be a String by
+        // definition.
         let not_a_string_err = format!("RHS of filter: {:?} is not a string.", self);
         let not_a_string_or_number_err =
             format!("RHS of filter: {:?} is not a string or a number.", self);
@@ -347,81 +735,16 @@ pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, 
 }
 
 /// A structure to represent an SQL select statement.
-/// Examples:
-/// ```rust,ignore
-/// // Initialise a new Select object using struct syntax.
-/// let mut select = Select {
-///     // When names require quotation marks (e.g. if they contain a space), then these must be
-///     // supplied by the user:
-///     table: String::from(r#""my table""#),
-///     limit: Some(10),
-///     ..Default::default()
-/// };
-/// // Query the database for the columns of the corresponding table and add them all to the
-/// // `select` field:
-/// select.select_all(&postgresql_pool);
-/// let expected_sql = format!(
-///     r#"{} {}"#,
-///     r#"SELECT "my column 1", "my column 2", "my column 3", "my column 4""#,
-///     r#"FROM "my table" LIMIT 10"#
-/// );
-/// assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
-///
-/// // Initialise a new Select object by calling new() and then progressively add further
-/// // information. Note that method chaining is possible, as illustrated below, but you must
-/// // first create the struct in a separate statement.
-/// let mut select = Select::new(r#""a table name with spaces""#);
-/// select
-///     .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
-///     .filters(vec![
-///         Filter::new("foo", "is", json!("{foo}")).unwrap(),
-///         Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap(),
-///     ])
-///     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
-///     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
-///     .having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()])
-///     .limit(11)
-///     .offset(50);
-///
-/// // Note that the convenience methods, `to_sqlite()` and `to_postgres()` may be used instead
-/// // of `to_sql(&DbType::Sqlite)` and `to_sql(&DbType::Postgres)`, respectively.
-/// assert_eq!(
-///     select.to_postgres().unwrap(),
-///     format!(
-///         "{} {} {} {} {} {} {}",
-///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-///         r#"FROM "a table name with spaces""#,
-///         r#"WHERE foo IS NOT DISTINCT FROM {foo} AND bar IN ({val1}, {val2})"#,
-///         r#"GROUP BY foo, "a column name with spaces", bar"#,
-///         r#"HAVING COUNT(1) > 1"#,
-///         r#"ORDER BY foo ASC, bar DESC"#,
-///         r#"LIMIT 11 OFFSET 50"#
-///     )
-/// );
-/// assert_eq!(
-///     select.to_sqlite().unwrap(),
-///     format!(
-///         "{} {} {} {} {} {} {}",
-///         r#"SELECT foo, "a column name with spaces", bar, COUNT(1)"#,
-///         r#"FROM "a table name with spaces""#,
-///         r#"WHERE foo IS {foo} AND bar IN ({val1}, {val2})"#,
-///         r#"GROUP BY foo, "a column name with spaces", bar"#,
-///         r#"HAVING COUNT(1) > 1"#,
-///         r#"ORDER BY foo ASC, bar DESC"#,
-///         r#"LIMIT 11 OFFSET 50"#
-///     )
-/// );
-/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
-    table: String,
-    select: Vec<String>,
-    filters: Vec<Filter>,
-    group_by: Vec<String>,
-    having: Vec<Filter>,
-    order_by: Vec<(String, Direction)>,
-    limit: Option<usize>,
-    offset: Option<usize>,
+    pub table: String,
+    pub select: Vec<String>,
+    pub filters: Vec<Filter>,
+    pub group_by: Vec<String>,
+    pub having: Vec<Filter>,
+    pub order_by: Vec<(String, Direction)>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 impl Select {
@@ -1027,6 +1350,7 @@ pub fn interpolate_sql<S: Into<String>>(
     Ok(final_sql)
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1038,411 +1362,5 @@ mod tests {
         query as sqlx_query, Row,
     };
     use std::{collections::HashMap, str::FromStr};
-
-    fn bind_execute_interpolate_sql(pool: &AnyPool) {
-        let drop_query = sqlx_query(r#"DROP TABLE IF EXISTS "test""#);
-        block_on(drop_query.execute(pool)).unwrap();
-
-        let create_query = sqlx_query(
-            r#"CREATE TABLE "test" ("table" TEXT, "row_num" BIGINT, "col1" TEXT, "col2" TEXT)"#,
-        );
-        block_on(create_query.execute(pool)).unwrap();
-
-        let insert_query = sqlx_query(r#"INSERT INTO "test" VALUES ('foo', 1, 'bar', 'bar')"#);
-        block_on(insert_query.execute(pool)).unwrap();
-
-        let test_sql = indoc! {r#"
-               SELECT "table", "row_num", "col1", "col2"
-               FROM "test"
-               WHERE "table" = {table}
-                 AND "row_num" = {row_num}
-                 AND "col1" = {column}
-                 AND "col2" = {column}
-            "#};
-        let mut test_params = HashMap::new();
-        test_params.insert("table", json!("foo"));
-        test_params.insert("row_num", json!(1));
-        test_params.insert("column", json!("bar"));
-        let (test_sql, test_params) = bind_sql(pool, test_sql, &test_params).unwrap();
-        let mut test_query = sqlx_query(&test_sql);
-        for param in &test_params {
-            match param {
-                SerdeValue::String(s) => test_query = test_query.bind(s),
-                SerdeValue::Number(n) => test_query = test_query.bind(n.as_i64()),
-                _ => panic!("{} is not a string or a number.", param),
-            };
-        }
-
-        let row = block_on(test_query.fetch_one(pool)).unwrap();
-        let table: &str = row.get("table");
-        assert_eq!(table, "foo");
-        let row_num: i64 = row.get("row_num");
-        assert_eq!(row_num, 1);
-        let col1: &str = row.get("col1");
-        assert_eq!(col1, "bar");
-        let col2: &str = row.get("col2");
-        assert_eq!(col2, "bar");
-
-        let interpolated_sql = interpolate_sql(pool, &test_sql, &test_params, None).unwrap();
-        assert_eq!(
-            indoc! {r#"
-               SELECT "table", "row_num", "col1", "col2"
-               FROM "test"
-               WHERE "table" = 'foo'
-                 AND "row_num" = 1
-                 AND "col1" = 'bar'
-                 AND "col2" = 'bar'
-            "#},
-            interpolated_sql
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn sqlite_bind_execute_interpolate_sql() {
-        let connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
-                .unwrap();
-        bind_execute_interpolate_sql(&pool);
-    }
-
-    #[test]
-    #[serial]
-    fn sqlite_localise_interpolate_sql() {
-        let connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
-                .unwrap();
-        let generic_sql = r#"SELECT "foo" FROM "bar" WHERE "xyzzy" IN (VAL, VAL, VAL)"#;
-        let local_sql = local_sql_syntax(&pool, "VAL", generic_sql);
-        assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN (?, ?, ?)", local_sql);
-    }
-
-    #[test]
-    #[serial]
-    fn postgres_bind_execute_interpolate_sql() {
-        let connection_options =
-            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
-                .unwrap();
-        bind_execute_interpolate_sql(&pool);
-    }
-
-    #[test]
-    #[serial]
-    fn postgres_localise_interpolate_sql() {
-        let connection_options =
-            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(connection_options))
-                .unwrap();
-        let generic_sql = r#"SELECT "foo" FROM "bar" WHERE "xyzzy" IN (VAL, VAL, VAL)"#;
-        let local_sql = local_sql_syntax(&pool, "VAL", generic_sql);
-        assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN ($1, $2, $3)", local_sql);
-    }
-
-    fn setup_for_select_test() -> (AnyPool, AnyPool) {
-        // Setup database connections and create the needed tables:
-        let pg_connection_options =
-            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let postgresql_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
-
-        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let sqlite_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
-                .unwrap();
-
-        let drop_table1 = r#"DROP TABLE IF EXISTS "my_table""#;
-        let create_table1 = r#"CREATE TABLE "my_table" (
-                                 "row_number" BIGINT,
-                                 "prefix" TEXT,
-                                 "base" TEXT,
-                                 "ontology IRI" TEXT,
-                                 "version IRI" TEXT
-                               )"#;
-        let insert_table1 = r#"INSERT INTO "my_table" VALUES
-                                (1, 'p1', 'b1', 'o1', 'v1'),
-                                (2, 'p2', 'b2', 'o2', 'v2'),
-                                (3, 'p3', 'b3', 'o3', 'v3'),
-                                (4, 'p4', 'b4', 'o1', 'v4')"#;
-
-        let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
-        let create_table2 = r#"CREATE TABLE "a table name with spaces" (
-                                 "foo" TEXT,
-                                 "a column name with spaces" TEXT,
-                                 "bar" TEXT
-                               )"#;
-        let insert_table2 = r#"INSERT INTO "a table name with spaces" VALUES
-                                ('f1', 's1', 'b1'),
-                                ('f2', 's2', 'b2'),
-                                ('f3', 's3', 'b3'),
-                                ('f4', 's4', 'b4'),
-                                ('f5', 's5', 'b5'),
-                                ('f6', 's6', 'b6')"#;
-        for pool in vec![&sqlite_pool, &postgresql_pool] {
-            for sql in &vec![
-                drop_table1,
-                create_table1,
-                insert_table1,
-                drop_table2,
-                create_table2,
-                insert_table2,
-            ] {
-                let query = sqlx_query(sql);
-                block_on(query.execute(pool)).unwrap();
-            }
-        }
-
-        (sqlite_pool, postgresql_pool)
-    }
-
-    #[test]
-    #[serial]
-    fn select_to_sql() {
-        let select = Select {
-            table: String::from("my_table"),
-            select: vec![
-                "row_number".to_string(),
-                "prefix".to_string(),
-                "base".to_string(),
-                r#""ontology IRI""#.to_string(),
-                r#""version IRI""#.to_string(),
-            ],
-            limit: Some(10),
-            ..Default::default()
-        };
-        let expected_sql = format!(
-            r#"{} {}"#,
-            r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
-            "FROM my_table LIMIT 10"
-        );
-        assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
-        assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
-    }
-
-    #[test]
-    #[serial]
-    fn select_to_sql_and_execute() {
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut select = Select::new(r#""a table name with spaces""#);
-        select.select(vec!["foo", r#""a column name with spaces""#]);
-        select.add_select("bar");
-        select.add_select("COUNT(1)");
-        select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
-        select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
-        select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
-        select.group_by(vec!["foo"]);
-        select.add_group_by(r#""a column name with spaces""#);
-        select.add_group_by("bar");
-        select.having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()]);
-        select.limit(11);
-        select.offset(50);
-
-        // Convert the Select to SQL in both Postgres and Sqlite:
-        for pool in vec![&postgresql_pool, &sqlite_pool] {
-            let (expected_is_clause, placeholder1, placeholder2, placeholder3);
-            if pool.any_kind() == AnyKind::Postgres {
-                expected_is_clause = "IS NOT DISTINCT FROM";
-                placeholder1 = "$1";
-                placeholder2 = "$2";
-                placeholder3 = "$3";
-            } else {
-                expected_is_clause = "IS";
-                placeholder1 = "?";
-                placeholder2 = "?";
-                placeholder3 = "?";
-            }
-
-            let expected_sql_with_mapvars = format!(
-                "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
-                 FROM \"a table name with spaces\" \
-                 WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
-                 GROUP BY foo, \"a column name with spaces\", bar \
-                 HAVING COUNT(1) > 1 \
-                 ORDER BY foo ASC, bar DESC \
-                 LIMIT 11 OFFSET 50",
-                expected_is_clause,
-            );
-            let dbtype = get_db_type(&pool).unwrap();
-            let sql = select.to_sql(&dbtype).unwrap();
-            assert_eq!(expected_sql_with_mapvars, sql);
-
-            // Bind the SQL and verify the binding:
-            let mut param_map = HashMap::new();
-            param_map.insert("foo", json!("foo_val"));
-            param_map.insert("val1", json!("bar_val1"));
-            param_map.insert("val2", json!("bar_val2"));
-
-            let expected_sql_with_listvars = format!(
-                "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
-                 FROM \"a table name with spaces\" \
-                 WHERE foo {} {} AND bar IN ({}, {}) \
-                 GROUP BY foo, \"a column name with spaces\", bar \
-                 HAVING COUNT(1) > 1 \
-                 ORDER BY foo ASC, bar DESC \
-                 LIMIT 11 OFFSET 50",
-                expected_is_clause, placeholder1, placeholder2, placeholder3,
-            );
-            let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
-            assert_eq!(expected_sql_with_listvars, sql);
-            match params[0] {
-                SerdeValue::String(s) if s == "foo_val" => assert!(true),
-                _ => assert!(false, "{} != 'foo_val'", params[0]),
-            };
-            match params[1] {
-                SerdeValue::String(s) if s == "bar_val1" => assert!(true),
-                _ => assert!(false, "{} != 'bar_val1'", params[1]),
-            };
-            match params[2] {
-                SerdeValue::String(s) if s == "bar_val2" => assert!(true),
-                _ => assert!(false, "{} != 'bar_val2'", params[2]),
-            };
-
-            // Create and execute the query:
-            let mut query = sqlx_query(&sql);
-            for param in &params {
-                match param {
-                    SerdeValue::String(s) => query = query.bind(s),
-                    SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                    _ => panic!("{} is not a string or a number.", param),
-                };
-            }
-            block_on(query.execute(pool)).unwrap();
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn selects_to_sql_and_execute() {
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut cte = Select::new("my_table");
-        cte.select(vec!["prefix"]);
-        // Note: When building a Select struct, chaining is possible but you must first create
-        // a mutable struct in a separate statement before before chaining:
-        let mut main_select = Select::new("cte");
-        main_select.select(vec!["prefix"]).limit(10).offset(20);
-
-        let sql = selects_to_sql(&cte, &main_select, &DbType::Postgres).unwrap();
-        assert_eq!(
-            sql,
-            "WITH cte AS (SELECT prefix FROM my_table) SELECT prefix FROM cte LIMIT 10 OFFSET 20",
-        );
-        block_on(sqlx_query(&sql).execute(&sqlite_pool)).unwrap();
-        block_on(sqlx_query(&sql).execute(&postgresql_pool)).unwrap();
-    }
-
-    #[test]
-    #[serial]
-    fn select_to_rows() {
-        fn validate_rows(rows: &Vec<AnyRow>) {
-            let num_rows = rows.len();
-            for (i, row) in rows.iter().enumerate() {
-                let foo: &str = row.get("foo");
-                let spaces: &str = row.get("a column name with spaces");
-                let bar: &str = row.get("bar");
-                assert_eq!(foo.to_string(), format!("f{}", num_rows - i));
-                assert_eq!(spaces.to_string(), format!("s{}", num_rows - i));
-                assert_eq!(bar.to_string(), format!("b{}", num_rows - i));
-            }
-        }
-
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut select = Select::new(r#""a table name with spaces""#);
-        select
-            .select_all(&sqlite_pool)
-            .expect("")
-            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-            .order_by(vec![("foo", Direction::Descending)]);
-
-        let mut param_map = HashMap::new();
-        param_map.insert("foo1", json!("f5"));
-        param_map.insert("foo2", json!("f6"));
-        let rows = select.fetch_rows(&sqlite_pool, &param_map).unwrap();
-        validate_rows(&rows);
-        let rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
-        validate_rows(&rows);
-    }
-
-    #[test]
-    #[serial]
-    fn select_to_json_rows() {
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut select = Select::new(r#""a table name with spaces""#);
-        select
-            .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
-            .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-            .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
-            .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
-            .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
-            .limit(10)
-            .offset(1);
-
-        let mut param_map = HashMap::new();
-        param_map.insert("foo1", json!("f5"));
-        param_map.insert("foo2", json!("f6"));
-
-        for pool in vec![postgresql_pool, sqlite_pool] {
-            let json_rows = select.fetch_rows_as_json(&pool, &param_map).unwrap();
-            let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
-            for (i, row) in json_rows.iter().enumerate() {
-                let i = i + 2;
-                let expected_row = format!(
-                    r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
-                    i, i, i, count
-                );
-                let row = SerdeValue::Object(row.clone());
-                assert_eq!(format!("{}", row), expected_row)
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn selects_to_rows() {
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut cte = Select::new("my_table");
-        cte.select(vec!["prefix"]);
-        let mut main_select = Select::new("cte");
-        main_select
-            .select(vec!["prefix"])
-            .limit(10)
-            .offset(0)
-            .add_order_by(("prefix", Direction::Ascending));
-        for pool in vec![sqlite_pool, postgresql_pool] {
-            let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
-            for (i, row) in rows.iter().enumerate() {
-                let prefix: &str = row.get("prefix");
-                assert_eq!(prefix.to_string(), format!("p{}", i + 1));
-            }
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn selects_to_json_rows() {
-        let (sqlite_pool, postgresql_pool) = setup_for_select_test();
-        let mut cte = Select::new("my_table");
-        cte.select(vec!["prefix"]);
-        let mut main_select = Select::new("cte");
-        main_select
-            .select(vec!["prefix"])
-            .limit(10)
-            .offset(0)
-            .add_order_by(("prefix", Direction::Ascending));
-        for pool in vec![sqlite_pool, postgresql_pool] {
-            let json_rows =
-                fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
-                    .unwrap();
-            for (i, row) in json_rows.iter().enumerate() {
-                let i = i + 1;
-                let expected_row = format!(r#"{{"prefix":"p{}"}}"#, i);
-                let row = SerdeValue::Object(row.clone());
-                assert_eq!(format!("{}", row), expected_row)
-            }
-        }
-    }
 }
+*/
