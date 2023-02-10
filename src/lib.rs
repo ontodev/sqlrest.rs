@@ -1432,32 +1432,55 @@ mod tests {
         }
 
         for pool in &vec![sqlite_pool, postgresql_pool] {
-            println!("Running performance test for {:?}", pool.any_kind());
-            for sql in &vec![drop, create, &insert] {
-                let query = sqlx_query(sql);
+            let num_iterations = 5;
+            for i in 1..num_iterations {
+                println!(
+                    "Running performance test #{} of {} for {:?}",
+                    i,
+                    num_iterations,
+                    pool.any_kind()
+                );
+                for sql in &vec![drop, create, &insert] {
+                    let query = sqlx_query(sql);
+                    block_on(query.execute(pool)).unwrap();
+                }
+
+                let mut select = Select::new("my_table");
+                select
+                    .select(vec![
+                        "row_number",
+                        "prefix",
+                        "base",
+                        "\"ontology IRI\"",
+                        "\"version IRI\"",
+                    ])
+                    .filters(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
+
+                // Run the VACUUM command to clear the cache:
+                let query = sqlx_query("VACUUM");
                 block_on(query.execute(pool)).unwrap();
-            }
+                // Time the query:
+                let start = Instant::now();
+                let rows = select.fetch_rows(pool, &HashMap::new());
+                println!("Elapsed time for Select::fetch_rows(): {:.2?}", start.elapsed());
+                for row in rows.unwrap() {
+                    let _: &str = row.try_get("prefix").unwrap();
+                }
+                println!("Elapsed time after iterating: {:.2?}", start.elapsed());
 
-            let mut select = Select::new("my_table");
-            select
-                .select(vec!["row_number", "prefix", "base", "\"ontology IRI\"", "\"version IRI\""])
-                .filters(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
-
-            let start = Instant::now();
-            let rows = select.fetch_rows(pool, &HashMap::new());
-            println!("Elapsed time for Select::fetch_rows(): {:.2?}", start.elapsed());
-            for row in rows.unwrap() {
-                let _: &str = row.try_get("prefix").unwrap();
+                // Run the VACUUM command to clear the cache:
+                let query = sqlx_query("VACUUM");
+                block_on(query.execute(pool)).unwrap();
+                // Time the query:
+                let start = Instant::now();
+                let json_rows = select.fetch_rows_as_json(pool, &HashMap::new());
+                println!("Elapsed time for Select::fetch_rows_as_json(): {:.2?}", start.elapsed());
+                for row in json_rows.unwrap() {
+                    let _ = row.get("prefix").unwrap();
+                }
+                println!("Elapsed time after iterating: {:.2?}", start.elapsed());
+                println!("----------");
             }
-            println!("Elapsed time after iterating: {:.2?}", start.elapsed());
-
-            let start = Instant::now();
-            let json_rows = select.fetch_rows_as_json(pool, &HashMap::new());
-            println!("Elapsed time for Select::fetch_rows_as_json(): {:.2?}", start.elapsed());
-            for row in json_rows.unwrap() {
-                let _ = row.get("prefix").unwrap();
-            }
-            println!("Elapsed time after iterating: {:.2?}", start.elapsed());
         }
     }
 }
