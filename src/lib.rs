@@ -1361,10 +1361,9 @@ pub fn interpolate_sql<S: Into<String>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indoc::indoc;
     use serde_json::json;
     use sqlx::{
-        any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
+        any::{AnyConnectOptions, AnyPoolOptions},
         query as sqlx_query, Row,
     };
     use std::{char, collections::HashMap, str::FromStr, time::Instant};
