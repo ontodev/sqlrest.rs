@@ -1362,7 +1362,7 @@ pub fn interpolate_sql<S: Into<String>>(
 mod tests {
     use super::*;
     use serde_json::json;
-    use serial_test::serial;
+    use serial_test::{parallel, serial};
     use sqlx::{
         any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
         query as sqlx_query, Row,
@@ -1464,6 +1464,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Performance tests are disabled by default. Remove this directive to enable this.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on PostgreSQL. Note that to view the output of the test you must
@@ -1478,6 +1479,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Performance tests are disabled by default. Remove this directive to enable this.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on SQLite. Note that to view the output of the test you must
@@ -1489,5 +1491,56 @@ mod tests {
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
                 .unwrap();
         perf_test_for_db(&sqlite_pool);
+    }
+
+    #[test]
+    #[parallel]
+    fn test_real() {
+        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
+        let sqlite_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+                .unwrap();
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let postgresql_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+                .unwrap();
+
+        for pool in &vec![sqlite_pool, postgresql_pool] {
+            let drop = r#"DROP TABLE IF EXISTS "my_table""#;
+            let create = r#"CREATE TABLE "my_table" (
+                          "row_number" BIGINT,
+                          "column_1" TEXT,
+                          "column_2" TEXT,
+                          "column_3" REAL
+                        )"#;
+            let insert = r#"INSERT INTO "my_table" VALUES
+                        (1, 'one', 'eins', 1.1),
+                        (2, 'two', 'zwei', 2.2),
+                        (3, 'three', 'drei', 3.3)"#;
+
+            for sql in &vec![drop, create, &insert] {
+                let query = sqlx_query(sql);
+                block_on(query.execute(pool)).unwrap();
+            }
+
+            let mut select = Select::new("my_table");
+            select
+                .select_all(pool)
+                .unwrap()
+                .add_filter(Filter::new("column_3", "gt", json!(3.2)).unwrap());
+
+            let mut rows = select.fetch_rows(pool, &HashMap::new()).unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = rows.pop().unwrap();
+            let column_3: f32 = row.try_get("column_3").unwrap();
+            assert_eq!(column_3, 3.3);
+
+            let mut rows = select.fetch_rows_as_json(pool, &HashMap::new()).unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = rows.pop().unwrap();
+            let column_3 = row.get("column_3").and_then(|c| c.as_f64()).unwrap();
+            assert_eq!(column_3, 3.3);
+        }
     }
 }
