@@ -1403,7 +1403,7 @@ mod tests {
         }
 
         let mut insert = String::from(r#"INSERT INTO "my_table" VALUES "#);
-        let num_rows = 1000000;
+        let num_rows = 250000;
         let num_columns = 5;
         for i in 1..num_rows {
             insert.push_str(&format!("({}, ", i));
@@ -1418,7 +1418,7 @@ mod tests {
             }
         }
 
-        let num_iterations = 3;
+        let num_iterations = 5;
         for i in 1..(num_iterations + 1) {
             println!(
                 "Running performance test #{} of {} for {:?}",
