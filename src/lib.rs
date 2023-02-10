@@ -1362,27 +1362,14 @@ pub fn interpolate_sql<S: Into<String>>(
 mod tests {
     use super::*;
     use serde_json::json;
+    use serial_test::serial;
     use sqlx::{
-        any::{AnyConnectOptions, AnyPoolOptions},
+        any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
         query as sqlx_query, Row,
     };
     use std::{char, collections::HashMap, str::FromStr, time::Instant};
 
-    #[test]
-    /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
-    /// functions on both SQLite and PostgreSQL. Note that to view the output of the test you must
-    /// use the 'nocapture' option: `cargo test -- --nocapture`
-    fn perf_test() {
-        let pg_connection_options =
-            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let postgresql_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
-        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let sqlite_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
-                .unwrap();
-
+    fn perf_test_for_db(pool: &AnyPool) {
         let drop = r#"DROP TABLE IF EXISTS "my_table""#;
         let create = r#"CREATE TABLE "my_table" (
                           "row_number" BIGINT,
@@ -1431,56 +1418,76 @@ mod tests {
             }
         }
 
-        for pool in &vec![sqlite_pool, postgresql_pool] {
-            let num_iterations = 5;
-            for i in 1..num_iterations {
-                println!(
-                    "Running performance test #{} of {} for {:?}",
-                    i,
-                    num_iterations,
-                    pool.any_kind()
-                );
-                for sql in &vec![drop, create, &insert] {
-                    let query = sqlx_query(sql);
-                    block_on(query.execute(pool)).unwrap();
-                }
-
-                let mut select = Select::new("my_table");
-                select
-                    .select(vec![
-                        "row_number",
-                        "prefix",
-                        "base",
-                        "\"ontology IRI\"",
-                        "\"version IRI\"",
-                    ])
-                    .filters(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
-
-                // Run the VACUUM command to clear the cache:
-                let query = sqlx_query("VACUUM");
+        let num_iterations = 5;
+        for i in 1..num_iterations {
+            println!(
+                "Running performance test #{} of {} for {:?}",
+                i,
+                num_iterations,
+                pool.any_kind()
+            );
+            for sql in &vec![drop, create, &insert] {
+                let query = sqlx_query(sql);
                 block_on(query.execute(pool)).unwrap();
-                // Time the query:
-                let start = Instant::now();
-                let rows = select.fetch_rows(pool, &HashMap::new());
-                println!("Elapsed time for Select::fetch_rows(): {:.2?}", start.elapsed());
-                for row in rows.unwrap() {
-                    let _: &str = row.try_get("prefix").unwrap();
-                }
-                println!("Elapsed time after iterating: {:.2?}", start.elapsed());
-
-                // Run the VACUUM command to clear the cache:
-                let query = sqlx_query("VACUUM");
-                block_on(query.execute(pool)).unwrap();
-                // Time the query:
-                let start = Instant::now();
-                let json_rows = select.fetch_rows_as_json(pool, &HashMap::new());
-                println!("Elapsed time for Select::fetch_rows_as_json(): {:.2?}", start.elapsed());
-                for row in json_rows.unwrap() {
-                    let _ = row.get("prefix").unwrap();
-                }
-                println!("Elapsed time after iterating: {:.2?}", start.elapsed());
-                println!("----------");
             }
+
+            let mut select = Select::new("my_table");
+            select
+                .select(vec!["row_number", "prefix", "base", "\"ontology IRI\"", "\"version IRI\""])
+                .filters(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
+
+            // Run the VACUUM command to clear the cache:
+            let query = sqlx_query("VACUUM");
+            block_on(query.execute(pool)).unwrap();
+            // Time the query:
+            let start = Instant::now();
+            let rows = select.fetch_rows(pool, &HashMap::new());
+            println!("Elapsed time for Select::fetch_rows(): {:.2?}", start.elapsed());
+            for row in rows.unwrap() {
+                let _: &str = row.try_get("prefix").unwrap();
+            }
+            println!("Elapsed time after iterating: {:.2?}", start.elapsed());
+
+            // Run the VACUUM command to clear the cache:
+            let query = sqlx_query("VACUUM");
+            block_on(query.execute(pool)).unwrap();
+            // Time the query:
+            let start = Instant::now();
+            let json_rows = select.fetch_rows_as_json(pool, &HashMap::new());
+            println!("Elapsed time for Select::fetch_rows_as_json(): {:.2?}", start.elapsed());
+            for row in json_rows.unwrap() {
+                let _ = row.get("prefix").unwrap();
+            }
+            println!("Elapsed time after iterating: {:.2?}", start.elapsed());
+            println!("----------");
         }
+    }
+
+    #[test]
+    #[serial]
+    /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
+    /// functions on PostgreSQL. Note that to view the output of the test you must
+    /// use the 'nocapture' option: `cargo test -- --nocapture`
+    fn perf_test_postgresql() {
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let postgresql_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+                .unwrap();
+        perf_test_for_db(&postgresql_pool);
+    }
+
+    #[test]
+    #[serial]
+    /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
+    /// functions on SQLite. Note that to view the output of the test you must
+    /// use the 'nocapture' option: `cargo test -- --nocapture`
+    fn perf_test_sqlite() {
+        let sq_connection_options =
+            AnyConnectOptions::from_str("sqlite://test.db?mode=rwc").unwrap();
+        let sqlite_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+                .unwrap();
+        perf_test_for_db(&sqlite_pool);
     }
 }
