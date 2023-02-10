@@ -1419,7 +1419,7 @@ mod tests {
         }
 
         let num_iterations = 5;
-        for i in 1..num_iterations {
+        for i in 1..(num_iterations + 1) {
             println!(
                 "Running performance test #{} of {} for {:?}",
                 i,
