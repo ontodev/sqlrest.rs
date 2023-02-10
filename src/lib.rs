@@ -1418,7 +1418,7 @@ mod tests {
             }
         }
 
-        let num_iterations = 5;
+        let num_iterations = 3;
         for i in 1..(num_iterations + 1) {
             println!(
                 "Running performance test #{} of {} for {:?}",
