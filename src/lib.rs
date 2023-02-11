@@ -393,7 +393,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as SerdeMap, Value as SerdeValue};
 use sqlx::{
     any::{AnyKind, AnyPool, AnyRow},
-    query as sqlx_query, Row, ValueRef,
+    query as sqlx_query, Row,
 };
 use std::{collections::HashMap, str::FromStr};
 
@@ -1000,7 +1000,7 @@ impl Select {
             let json_select = json_keys.join(", ");
             format!("SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})", json_select, sql)
         } else {
-            format!("SELECT JSON_AGG(t) AS row FROM ({}) t", sql)
+            format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
         };
 
         let bind_result = bind_sql(pool, &sql, param_map);
@@ -1052,7 +1052,13 @@ impl Select {
             return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
         }
         let row = rows.pop().unwrap();
-        extract_rows_from_json_row(&row)
+
+        let json_row = row.try_get("row");
+        if let Err(e) = json_row {
+            return Err(e.to_string());
+        }
+        let json_row: &str = json_row.unwrap();
+        extract_rows_from_json_str(json_row)
     }
 }
 
@@ -1110,47 +1116,25 @@ pub fn fetch_rows_from_selects(
     }
 }
 
-/// Given an AnyRow, extract the JSON structure that is assumed to be encoded in the 'row' column
-/// of the row. This JSON is assumed to represent an array of objects such that each object
-/// represents a row. Unwrap the objects and add them to a vector which is then returned to the
-/// caller.
-fn extract_rows_from_json_row(row: &AnyRow) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
-    fn extract_rows_from_json_str(
-        json_row: &str,
-    ) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
-        let mut rows = vec![];
-        match serde_json::from_str::<SerdeValue>(json_row) {
-            Err(e) => return Err(e.to_string()),
-            Ok(json_row) => match json_row {
-                SerdeValue::Array(json_row) => {
-                    for json_cell in json_row {
-                        match json_cell {
-                            SerdeValue::Object(json_cell) => rows.push(json_cell),
-                            _ => return Err(format!("Expected object. Got: {}", json_cell)),
-                        };
-                    }
-                }
-                _ => return Err(format!("Expected array. Got: {}", json_row)),
-            },
-        };
-        Ok(rows)
-    }
-    match row.try_get_raw("row") {
-        Err(e) => Err(e.to_string()),
-        Ok(json_row) => {
-            if json_row.is_null() {
-                Err("Expected a JSON but got NULL for 'row' field.".to_string())
-            } else {
-                match serde_json::from_str::<SerdeValue>(row.get_unchecked("row")) {
-                    Err(e) => Err(e.to_string()),
-                    Ok(json_row) => {
-                        let json_row = format!("{}", json_row);
-                        extract_rows_from_json_str(&json_row)
-                    }
+/// Given a JSON-formatted string representing an array of objects such that each object represents
+/// a row, unwrap the objects and add them to a vector which is then returned to the caller.
+fn extract_rows_from_json_str(json_row: &str) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
+    let mut rows = vec![];
+    match serde_json::from_str::<SerdeValue>(json_row) {
+        Err(e) => return Err(e.to_string()),
+        Ok(json_row) => match json_row {
+            SerdeValue::Array(json_row) => {
+                for json_cell in json_row {
+                    match json_cell {
+                        SerdeValue::Object(json_cell) => rows.push(json_cell),
+                        _ => return Err(format!("Expected object. Got: {}", json_cell)),
+                    };
                 }
             }
-        }
-    }
+            _ => return Err(format!("Expected array. Got: {}", json_row)),
+        },
+    };
+    Ok(rows)
 }
 
 /// Given two Select structs, a database connection pool, and a parameter map: Generate a SQL
@@ -1183,7 +1167,7 @@ pub fn fetch_rows_as_json_from_selects(
                         json_select, sql
                     )
                 } else {
-                    format!("SELECT JSON_AGG(t) AS row FROM ({}) t", sql)
+                    format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
                 }
             }
         },
@@ -1211,7 +1195,10 @@ pub fn fetch_rows_as_json_from_selects(
         }
         Ok(mut rows) => {
             let row = rows.pop().unwrap();
-            extract_rows_from_json_row(&row)
+            match row.try_get("row") {
+                Err(e) => Err(format!("{}", e)),
+                Ok(json_row) => extract_rows_from_json_str(json_row),
+            }
         }
     }
 }
