@@ -4,9 +4,7 @@
      in src/lib.rs, install cargo-readme using `cargo install cargo-readme` and then run:
      `cargo readme > README.md` -->
 
-SQLRest.rs
-
-## Examples
+### Examples
 ```rust
 use ontodev_sqlrest::{
     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,

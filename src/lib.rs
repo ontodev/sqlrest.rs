@@ -1,6 +1,8 @@
-//! SQLRest.rs
+//! <!-- Please do not edit README.md directly. To generate a new readme from the crate documentation
+//!      in src/lib.rs, install cargo-readme using `cargo install cargo-readme` and then run:
+//!      `cargo readme > README.md` -->
 //!
-//! # Examples
+//! ## Examples
 //! ```rust
 //! use ontodev_sqlrest::{
 //!     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
@@ -240,18 +242,18 @@
 //!     );
 //!     let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
 //!     assert_eq!(expected_sql_with_listvars, sql);
-//!     # match params[0] {
-//!     #     SerdeValue::String(s) if s == "foo_val" => assert!(true),
-//!     #     _ => assert!(false, "{} != 'foo_val'", params[0]),
-//!     # };
-//!     # match params[1] {
-//!     #     SerdeValue::String(s) if s == "bar_val1" => assert!(true),
-//!     #     _ => assert!(false, "{} != 'bar_val1'", params[1]),
-//!     # };
-//!     # match params[2] {
-//!     #     SerdeValue::String(s) if s == "bar_val2" => assert!(true),
-//!     #     _ => assert!(false, "{} != 'bar_val2'", params[2]),
-//!     # };
+//! #     match params[0] {
+//! #         SerdeValue::String(s) if s == "foo_val" => assert!(true),
+//! #         _ => assert!(false, "{} != 'foo_val'", params[0]),
+//! #     };
+//! #     match params[1] {
+//! #         SerdeValue::String(s) if s == "bar_val1" => assert!(true),
+//! #         _ => assert!(false, "{} != 'bar_val1'", params[1]),
+//! #     };
+//! #     match params[2] {
+//! #         SerdeValue::String(s) if s == "bar_val2" => assert!(true),
+//! #         _ => assert!(false, "{} != 'bar_val2'", params[2]),
+//! #     };
 //!     let mut query = sqlx_query(&sql);
 //!     for param in &params {
 //!         match param {
@@ -329,16 +331,16 @@
 //! param_map.insert("foo2", json!("f6"));
 //! for pool in vec![postgresql_pool, sqlite_pool] {
 //!     let json_rows = select.fetch_rows_as_json(&pool, &param_map).unwrap();
-//!     # let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
-//!     # for (i, row) in json_rows.iter().enumerate() {
-//!     #     let i = i + 2;
-//!     #     let expected_row = format!(
-//!     #         r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
-//!     #         i, i, i, count
-//!     #     );
-//!     #     let row = SerdeValue::Object(row.clone());
-//!     #     assert_eq!(format!("{}", row), expected_row)
-//!     # }
+//! #     let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
+//! #     for (i, row) in json_rows.iter().enumerate() {
+//! #         let i = i + 2;
+//! #         let expected_row = format!(
+//! #             r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
+//! #             i, i, i, count
+//! #         );
+//! #         let row = SerdeValue::Object(row.clone());
+//! #         assert_eq!(format!("{}", row), expected_row)
+//! #     }
 //! }
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! /*
@@ -354,10 +356,10 @@
 //!     .add_order_by(("prefix", Direction::Ascending));
 //! for pool in vec![sqlite_pool, postgresql_pool] {
 //!     let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
-//!     # for (i, row) in rows.iter().enumerate() {
-//!     #     let prefix: &str = row.get("prefix");
-//!     #     assert_eq!(prefix.to_string(), format!("p{}", i + 1));
-//!     # }
+//! #     for (i, row) in rows.iter().enumerate() {
+//! #         let prefix: &str = row.get("prefix");
+//! #         assert_eq!(prefix.to_string(), format!("p{}", i + 1));
+//! #     }
 //! }
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! /*
@@ -375,12 +377,12 @@
 //!     let json_rows =
 //!         fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
 //!             .unwrap();
-//!     # for (i, row) in json_rows.iter().enumerate() {
-//!     #     let i = i + 1;
-//!     #     let expected_row = format!(r#"{{"prefix":"p{}"}}"#, i);
-//!     #     let row = SerdeValue::Object(row.clone());
-//!     #     assert_eq!(format!("{}", row), expected_row)
-//!     # }
+//! #     for (i, row) in json_rows.iter().enumerate() {
+//! #         let i = i + 1;
+//! #         let expected_row = format!(r#"{{"prefix":"p{}"}}"#, i);
+//! #         let row = SerdeValue::Object(row.clone());
+//! #         assert_eq!(format!("{}", row), expected_row)
+//! #     }
 //! }
 //! ```
 
@@ -391,7 +393,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as SerdeMap, Value as SerdeValue};
 use sqlx::{
     any::{AnyKind, AnyPool, AnyRow},
-    query as sqlx_query, Row,
+    query as sqlx_query, Row, ValueRef,
 };
 use std::{collections::HashMap, str::FromStr};
 
@@ -998,7 +1000,7 @@ impl Select {
             let json_select = json_keys.join(", ");
             format!("SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})", json_select, sql)
         } else {
-            format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
+            format!("SELECT JSON_AGG(t) AS row FROM ({}) t", sql)
         };
 
         let bind_result = bind_sql(pool, &sql, param_map);
@@ -1050,13 +1052,7 @@ impl Select {
             return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
         }
         let row = rows.pop().unwrap();
-
-        let json_row = row.try_get("row");
-        if let Err(e) = json_row {
-            return Err(e.to_string());
-        }
-        let json_row: &str = json_row.unwrap();
-        extract_rows_from_json_str(json_row)
+        extract_rows_from_json_row(&row)
     }
 }
 
@@ -1114,25 +1110,47 @@ pub fn fetch_rows_from_selects(
     }
 }
 
-/// Given a JSON-formatted string representing an array of objects such that each object represents
-/// a row, unwrap the objects and add them to a vector which is then returned to the caller.
-fn extract_rows_from_json_str(json_row: &str) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
-    let mut rows = vec![];
-    match serde_json::from_str::<SerdeValue>(json_row) {
-        Err(e) => return Err(e.to_string()),
-        Ok(json_row) => match json_row {
-            SerdeValue::Array(json_row) => {
-                for json_cell in json_row {
-                    match json_cell {
-                        SerdeValue::Object(json_cell) => rows.push(json_cell),
-                        _ => return Err(format!("Expected object. Got: {}", json_cell)),
-                    };
+/// Given an AnyRow, extract the JSON structure that is assumed to be encoded in the 'row' column
+/// of the row. This JSON is assumed to represent an array of objects such that each object
+/// represents a row. Unwrap the objects and add them to a vector which is then returned to the
+/// caller.
+fn extract_rows_from_json_row(row: &AnyRow) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
+    fn extract_rows_from_json_str(
+        json_row: &str,
+    ) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
+        let mut rows = vec![];
+        match serde_json::from_str::<SerdeValue>(json_row) {
+            Err(e) => return Err(e.to_string()),
+            Ok(json_row) => match json_row {
+                SerdeValue::Array(json_row) => {
+                    for json_cell in json_row {
+                        match json_cell {
+                            SerdeValue::Object(json_cell) => rows.push(json_cell),
+                            _ => return Err(format!("Expected object. Got: {}", json_cell)),
+                        };
+                    }
+                }
+                _ => return Err(format!("Expected array. Got: {}", json_row)),
+            },
+        };
+        Ok(rows)
+    }
+    match row.try_get_raw("row") {
+        Err(e) => Err(e.to_string()),
+        Ok(json_row) => {
+            if json_row.is_null() {
+                Err("Expected a JSON but got NULL for 'row' field.".to_string())
+            } else {
+                match serde_json::from_str::<SerdeValue>(row.get_unchecked("row")) {
+                    Err(e) => Err(e.to_string()),
+                    Ok(json_row) => {
+                        let json_row = format!("{}", json_row);
+                        extract_rows_from_json_str(&json_row)
+                    }
                 }
             }
-            _ => return Err(format!("Expected array. Got: {}", json_row)),
-        },
-    };
-    Ok(rows)
+        }
+    }
 }
 
 /// Given two Select structs, a database connection pool, and a parameter map: Generate a SQL
@@ -1165,7 +1183,7 @@ pub fn fetch_rows_as_json_from_selects(
                         json_select, sql
                     )
                 } else {
-                    format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
+                    format!("SELECT JSON_AGG(t) AS row FROM ({}) t", sql)
                 }
             }
         },
@@ -1193,10 +1211,7 @@ pub fn fetch_rows_as_json_from_selects(
         }
         Ok(mut rows) => {
             let row = rows.pop().unwrap();
-            match row.try_get("row") {
-                Err(e) => Err(format!("{}", e)),
-                Ok(json_row) => extract_rows_from_json_str(json_row),
-            }
+            extract_rows_from_json_row(&row)
         }
     }
 }
@@ -1362,7 +1377,7 @@ pub fn interpolate_sql<S: Into<String>>(
 mod tests {
     use super::*;
     use serde_json::json;
-    use serial_test::{parallel, serial};
+    use serial_test::serial;
     use sqlx::{
         any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
         query as sqlx_query, Row,
@@ -1464,7 +1479,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Performance tests are disabled by default. Remove this directive to enable this.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on PostgreSQL. Note that to view the output of the test you must
@@ -1479,7 +1493,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Performance tests are disabled by default. Remove this directive to enable this.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on SQLite. Note that to view the output of the test you must
@@ -1494,8 +1507,8 @@ mod tests {
     }
 
     #[test]
-    #[parallel]
-    fn test_real() {
+    #[serial]
+    fn test_real_datatype() {
         let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
         let sqlite_pool =
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
@@ -1542,5 +1555,61 @@ mod tests {
             let column_3 = row.get("column_3").and_then(|c| c.as_f64()).unwrap();
             assert_eq!(column_3, 3.3);
         }
+    }
+
+    #[test]
+    #[serial]
+    fn test_json_datatype() {
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+                .unwrap();
+
+        let drop = r#"DROP TABLE IF EXISTS "my_table""#;
+        let create = r#"CREATE TABLE "my_table" (
+                          "row_number" BIGINT,
+                          "column_1" TEXT,
+                          "column_2" TEXT,
+                          "column_3" JSON
+                        )"#;
+        let insert = r#"INSERT INTO "my_table" VALUES
+                        (1, 'one', 'eins', '1'::JSON),
+                        (2, 'two', 'zwei', '"dos"'::JSON),
+                        (3, 'three', 'drei', '{"fookey": "foovalue"}'::JSON)"#;
+
+        for sql in &vec![drop, create, &insert] {
+            let query = sqlx_query(sql);
+            block_on(query.execute(&pool)).unwrap();
+        }
+
+        let mut select = Select::new("my_table");
+        select
+            .select_all(&pool)
+            .unwrap()
+            .add_filter(Filter::new("row_number", "gt", json!(2)).unwrap());
+        let mut rows = select.fetch_rows(&pool, &HashMap::new()).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = rows.pop().unwrap();
+        let column_1: &str = row.try_get("column_1").unwrap();
+        let column_2: &str = row.try_get("column_2").unwrap();
+        let column_3 = match row.try_get_raw("column_3") {
+            Err(e) => panic!("{}", e),
+            Ok(column_3) => {
+                if column_3.is_null() {
+                    panic!("Expected a JSON but got NULL for 'row' field.");
+                } else {
+                    match serde_json::from_str::<SerdeValue>(row.get_unchecked("column_3")) {
+                        Err(e) => panic!("{}", e),
+                        Ok(column_3) => {
+                            format!("{}", column_3)
+                        }
+                    }
+                }
+            }
+        };
+        assert_eq!(column_1, "three");
+        assert_eq!(column_2, "drei");
+        assert_eq!(column_3, r#"{"fookey":"foovalue"}"#);
     }
 }
