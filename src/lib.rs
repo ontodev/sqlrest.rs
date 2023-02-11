@@ -1367,7 +1367,7 @@ mod tests {
     use serial_test::serial;
     use sqlx::{
         any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
-        query as sqlx_query, Row,
+        query as sqlx_query, Row, ValueRef,
     };
     use std::{char, collections::HashMap, str::FromStr, time::Instant};
 
