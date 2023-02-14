@@ -1466,6 +1466,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Performances test disabled by default.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on PostgreSQL. Note that to view the output of the test you must
@@ -1480,6 +1481,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Performances test disabled by default.
     #[serial]
     /// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
     /// functions on SQLite. Note that to view the output of the test you must
@@ -1598,5 +1600,15 @@ mod tests {
         assert_eq!(column_1, "three");
         assert_eq!(column_2, "drei");
         assert_eq!(column_3, r#"{"fookey":"foovalue"}"#);
+
+        let mut rows = select.fetch_rows_as_json(&pool, &HashMap::new()).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = rows.pop().unwrap();
+        let fooval =
+            row.get("column_3").and_then(|c| c.as_object()).and_then(|c| c.get("fookey")).unwrap();
+        match fooval {
+            SerdeValue::String(s) => assert_eq!(s, "foovalue"),
+            _ => panic!("'{}' does not match 'foovalue'", fooval),
+        };
     }
 }
