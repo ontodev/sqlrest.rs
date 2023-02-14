@@ -39,29 +39,6 @@
 //! let local_sql = local_sql_syntax(&postgresql_pool, "VAL", generic_sql);
 //! assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN ($1, $2, $3)", local_sql);
 //!
-//! /*
-//!  * Initialise a Select struct using struct syntax.
-//!  */
-//! let select = Select {
-//!     table: String::from("my_table"),
-//!     select: vec![
-//!         "row_number".to_string(),
-//!         "prefix".to_string(),
-//!         "base".to_string(),
-//!         r#""ontology IRI""#.to_string(),
-//!         r#""version IRI""#.to_string(),
-//!     ],
-//!     limit: Some(10),
-//!     ..Default::default()
-//! };
-//! let expected_sql = format!(
-//!     r#"{} {}"#,
-//!     r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
-//!     "FROM my_table LIMIT 10"
-//! );
-//! assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
-//! assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
-//!
 //! # for pool in vec![&sqlite_pool, &postgresql_pool] {
 //! # let drop_query = sqlx_query(r#"DROP TABLE IF EXISTS "test""#);
 //! # block_on(drop_query.execute(pool)).unwrap();
@@ -498,9 +475,9 @@ impl Direction {
 /// Representation of a filter in an SQL query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Filter {
-    lhs: String,
-    operator: Operator,
-    rhs: SerdeValue,
+    pub lhs: String,
+    pub operator: Operator,
+    pub rhs: SerdeValue,
 }
 
 impl Filter {
@@ -740,7 +717,7 @@ pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     pub table: String,
-    pub select: Vec<String>,
+    pub select: Vec<(String, Option<String>)>,
     pub filters: Vec<Filter>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
@@ -772,22 +749,22 @@ impl Select {
     pub fn select<S: Into<String>>(&mut self, select: Vec<S>) -> &mut Select {
         self.select.clear();
         for s in select {
-            self.select.push(s.into());
+            self.select.push((s.into(), None));
         }
         self
     }
 
     /// Given a column name, add it to the vector, `self.select`.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
-        self.select.push(select.into());
+        self.select.push((select.into(), None));
         self
     }
 
-    pub fn select_with_alias() {
+    pub fn aliased_select() {
         // TODO: to be implemented.
     }
 
-    pub fn add_select_with_alias() {
+    pub fn add_aliased_select() {
         // TODO: to be implemented.
     }
 
@@ -900,7 +877,7 @@ impl Select {
         let rows = block_on(query.fetch_all(pool)).unwrap();
         for row in &rows {
             let cname: &str = row.get("name");
-            self.select.push(format!(r#""{}""#, cname));
+            self.select.push((format!(r#""{}""#, cname), None));
         }
 
         Ok(self)
@@ -918,7 +895,13 @@ impl Select {
             return Err("Missing required field: `select` in to_sql()".to_string());
         }
 
-        let select_clause = self.select.join(", ");
+        let mut select_clause = vec![];
+        for (select, alias) in &self.select {
+            select_clause.push(select.to_string());
+        }
+        let select_clause = select_clause.join(", ");
+        //let select_clause = self.select.join(", ");
+
         let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
         if !self.filters.is_empty() {
             let where_clause = match filters_to_sql(&self.filters, &dbtype) {
@@ -993,7 +976,7 @@ impl Select {
             sql
         } else if dbtype == DbType::Sqlite {
             let mut json_keys = vec![];
-            for column in &self.select {
+            for (column, alias) in &self.select {
                 let unquoted_column = unquote(&column).unwrap_or(column.clone());
                 json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
             }
@@ -1157,7 +1140,7 @@ pub fn fetch_rows_as_json_from_selects(
             Ok(sql) => {
                 if dbtype == DbType::Sqlite {
                     let mut json_keys = vec![];
-                    for column in &select2.select {
+                    for (column, alias) in &select2.select {
                         let unquoted_column = unquote(&column).unwrap_or(column.clone());
                         json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
                     }
