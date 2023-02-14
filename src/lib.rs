@@ -896,11 +896,16 @@ impl Select {
         }
 
         let mut select_clause = vec![];
-        for (select, alias) in &self.select {
-            select_clause.push(select.to_string());
+        for (column, alias) in &self.select {
+            select_clause.push(format!("{}{}", column, {
+                if let Some(alias) = alias {
+                    format!("AS {}", alias)
+                } else {
+                    "".to_string()
+                }
+            }));
         }
         let select_clause = select_clause.join(", ");
-        //let select_clause = self.select.join(", ");
 
         let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
         if !self.filters.is_empty() {
@@ -977,7 +982,10 @@ impl Select {
         } else if dbtype == DbType::Sqlite {
             let mut json_keys = vec![];
             for (column, alias) in &self.select {
-                let unquoted_column = unquote(&column).unwrap_or(column.clone());
+                let unquoted_column = match alias {
+                    Some(alias) => alias.to_string(),
+                    None => unquote(&column).unwrap_or(column.clone()),
+                };
                 json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
             }
             let json_select = json_keys.join(", ");
@@ -1141,7 +1149,10 @@ pub fn fetch_rows_as_json_from_selects(
                 if dbtype == DbType::Sqlite {
                     let mut json_keys = vec![];
                     for (column, alias) in &select2.select {
-                        let unquoted_column = unquote(&column).unwrap_or(column.clone());
+                        let unquoted_column = match alias {
+                            Some(alias) => alias.to_string(),
+                            None => unquote(&column).unwrap_or(column.clone()),
+                        };
                         json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
                     }
                     let json_select = json_keys.join(", ");
