@@ -156,14 +156,14 @@
 //!  */
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! let mut select = Select::new(r#""a table name with spaces""#);
-//! select.select(vec!["foo", r#""a column name with spaces""#]);
+//! select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
 //! select.add_select("bar");
-//! select.add_select("COUNT(1)");
+//! select.add_aliased_select("COUNT(1)", "count");
 //! select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 //! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 //! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
 //! select.group_by(vec!["foo"]);
-//! select.add_group_by(r#""a column name with spaces""#);
+//! select.add_group_by("C");
 //! select.add_group_by("bar");
 //! select.having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()]);
 //! select.limit(11);
@@ -189,10 +189,10 @@
 //!     }
 //!
 //!     let expected_sql_with_mapvars = format!(
-//!         "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+//!         "SELECT foo AS foo, \"a column name with spaces\" AS C, bar, COUNT(1) AS count \
 //!          FROM \"a table name with spaces\" \
 //!          WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
-//!          GROUP BY foo, \"a column name with spaces\", bar \
+//!          GROUP BY foo, C, bar \
 //!          HAVING COUNT(1) > 1 \
 //!          ORDER BY foo ASC, bar DESC \
 //!          LIMIT 11 OFFSET 50",
@@ -208,10 +208,10 @@
 //!     param_map.insert("val2", json!("bar_val2"));
 //!
 //!     let expected_sql_with_listvars = format!(
-//!         "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+//!         "SELECT foo AS foo, \"a column name with spaces\" AS C, bar, COUNT(1) AS count \
 //!          FROM \"a table name with spaces\" \
 //!          WHERE foo {} {} AND bar IN ({}, {}) \
-//!          GROUP BY foo, \"a column name with spaces\", bar \
+//!          GROUP BY foo, C, bar \
 //!          HAVING COUNT(1) > 1 \
 //!          ORDER BY foo ASC, bar DESC \
 //!          LIMIT 11 OFFSET 50",
@@ -295,7 +295,8 @@
 //!  */
 //! let mut select = Select::new(r#""a table name with spaces""#);
 //! select
-//!     .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+//!     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
+//!     .add_aliased_select("COUNT(1)", "count")
 //!     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
 //!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
 //!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
@@ -308,12 +309,11 @@
 //! param_map.insert("foo2", json!("f6"));
 //! for pool in vec![postgresql_pool, sqlite_pool] {
 //!     let json_rows = select.fetch_rows_as_json(&pool, &param_map).unwrap();
-//! #     let count = if pool.any_kind() == AnyKind::Postgres { "count" } else { "COUNT(1)" };
 //! #     for (i, row) in json_rows.iter().enumerate() {
 //! #         let i = i + 2;
 //! #         let expected_row = format!(
-//! #             r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","{}":1}}"#,
-//! #             i, i, i, count
+//! #             r#"{{"foo":"f{}","a column name with spaces":"s{}","bar":"b{}","count":1}}"#,
+//! #             i, i, i
 //! #         );
 //! #         let row = SerdeValue::Object(row.clone());
 //! #         assert_eq!(format!("{}", row), expected_row)
@@ -744,8 +744,8 @@ impl Select {
         self
     }
 
-    /// Given a vector of column names, replace the current contents of `self.select` with the
-    /// contents of the given vector.
+    /// Given a vector of column expressions, replace the current contents of `self.select` with the
+    /// contents of the given vector, without specifying any aliases.
     pub fn select<S: Into<String>>(&mut self, select: Vec<S>) -> &mut Select {
         self.select.clear();
         for s in select {
@@ -754,18 +754,28 @@ impl Select {
         self
     }
 
-    /// Given a column name, add it to the vector, `self.select`.
+    /// Given a vector of tuples such that the first place of each tuple is a column expression
+    /// and the second place is an alias for that expression, replace the current contents of
+    /// `self.select` with the contents of the given vector.
+    pub fn aliased_select<S: Into<String>>(&mut self, select: Vec<(S, S)>) -> &mut Select {
+        self.select.clear();
+        for (column, alias) in select {
+            self.select.push((column.into(), Some(alias.into())));
+        }
+        self
+    }
+
+    /// Given a column expression, add it to the vector, `self.select` without an alias.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
         self.select.push((select.into(), None));
         self
     }
 
-    pub fn aliased_select() {
-        // TODO: to be implemented.
-    }
-
-    pub fn add_aliased_select() {
-        // TODO: to be implemented.
+    /// Given a column expression and an alias for that expression, add the tuple (column, alias) to
+    /// the vector, `self.select`.
+    pub fn add_aliased_select<S: Into<String>>(&mut self, column: S, alias: S) -> &mut Select {
+        self.select.push((column.into(), Some(alias.into())));
+        self
     }
 
     /// Given a vector of filters, replace the current contents of `self.filters` with the contents
@@ -899,7 +909,7 @@ impl Select {
         for (column, alias) in &self.select {
             select_clause.push(format!("{}{}", column, {
                 if let Some(alias) = alias {
-                    format!("AS {}", alias)
+                    format!(" AS {}", alias)
                 } else {
                     "".to_string()
                 }
