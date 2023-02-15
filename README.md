@@ -32,29 +32,6 @@ let local_sql = local_sql_syntax(&postgresql_pool, "VAL", generic_sql);
 assert_eq!("SELECT \"foo\" FROM \"bar\" WHERE \"xyzzy\" IN ($1, $2, $3)", local_sql);
 
 /*
- * Initialise a Select struct using struct syntax.
- */
-let select = Select {
-    table: String::from("my_table"),
-    select: vec![
-        "row_number".to_string(),
-        "prefix".to_string(),
-        "base".to_string(),
-        r#""ontology IRI""#.to_string(),
-        r#""version IRI""#.to_string(),
-    ],
-    limit: Some(10),
-    ..Default::default()
-};
-let expected_sql = format!(
-    r#"{} {}"#,
-    r#"SELECT row_number, prefix, base, "ontology IRI", "version IRI""#,
-    "FROM my_table LIMIT 10"
-);
-assert_eq!(select.to_sql(&DbType::Postgres).unwrap(), expected_sql);
-assert_eq!(select.to_sql(&DbType::Sqlite).unwrap(), expected_sql);
-
-/*
  * Use the bind_sql() function to bind a given parameter map to a given SQL string, then call
  * interpolate_sql() on the bound SQL and parameter vector that are returned. Finally, create a
  * sqlx_query with the bound SQL and parameter vector and execute it.
@@ -100,14 +77,14 @@ let row = block_on(test_query.fetch_one(pool)).unwrap();
  * Create a new Select struct by calling new() and progressively adding fields.
  */
 let mut select = Select::new(r#""a table name with spaces""#);
-select.select(vec!["foo", r#""a column name with spaces""#]);
+select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
 select.add_select("bar");
-select.add_select("COUNT(1)");
+select.add_aliased_select("COUNT(1)", "count");
 select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
 select.group_by(vec!["foo"]);
-select.add_group_by(r#""a column name with spaces""#);
+select.add_group_by("C");
 select.add_group_by("bar");
 select.having(vec![Filter::new("COUNT(1)", "gt", json!(1)).unwrap()]);
 select.limit(11);
@@ -133,10 +110,10 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
     }
 
     let expected_sql_with_mapvars = format!(
-        "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+        "SELECT foo AS foo, \"a column name with spaces\" AS C, bar, COUNT(1) AS count \
          FROM \"a table name with spaces\" \
          WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
-         GROUP BY foo, \"a column name with spaces\", bar \
+         GROUP BY foo, C, bar \
          HAVING COUNT(1) > 1 \
          ORDER BY foo ASC, bar DESC \
          LIMIT 11 OFFSET 50",
@@ -152,10 +129,10 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
     param_map.insert("val2", json!("bar_val2"));
 
     let expected_sql_with_listvars = format!(
-        "SELECT foo, \"a column name with spaces\", bar, COUNT(1) \
+        "SELECT foo AS foo, \"a column name with spaces\" AS C, bar, COUNT(1) AS count \
          FROM \"a table name with spaces\" \
          WHERE foo {} {} AND bar IN ({}, {}) \
-         GROUP BY foo, \"a column name with spaces\", bar \
+         GROUP BY foo, C, bar \
          HAVING COUNT(1) > 1 \
          ORDER BY foo ASC, bar DESC \
          LIMIT 11 OFFSET 50",
@@ -212,7 +189,8 @@ let postgresql_rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
  */
 let mut select = Select::new(r#""a table name with spaces""#);
 select
-    .select(vec!["foo", r#""a column name with spaces""#, "bar", "COUNT(1)"])
+    .select(vec!["foo", r#""a column name with spaces""#, "bar"])
+    .add_aliased_select("COUNT(1)", "count")
     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
