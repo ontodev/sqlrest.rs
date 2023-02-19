@@ -80,7 +80,7 @@ let mut select = Select::new(r#""a table name with spaces""#);
 select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
 select.add_select("bar");
 select.add_aliased_select("COUNT(1)", "count");
-select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
+select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
 select.group_by(vec!["foo"]);
@@ -175,7 +175,7 @@ let mut select = Select::new(r#""a table name with spaces""#);
 select
     .select_all(&sqlite_pool)
     .expect("")
-    .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+    .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
     .order_by(vec![("foo", Direction::Descending)]);
 
 let mut param_map = HashMap::new();
@@ -191,7 +191,7 @@ let mut select = Select::new(r#""a table name with spaces""#);
 select
     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
     .add_aliased_select("COUNT(1)", "count")
-    .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+    .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
     .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])

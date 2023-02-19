@@ -14,3 +14,6 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 serde = { version = "1.0", features = ["derive"] }
 serial_test = "1.0.0"
 sqlx = { version = "0.6", features = [ "runtime-async-std-rustls", "any", "postgres", "sqlite" ] }
+tree-sitter = "~0.20.6"
+tree-sitter-sqlrest = { path = "../tree-sitter-sqlrest" }
+urlencoding = "2.1.2"

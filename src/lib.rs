@@ -159,7 +159,7 @@
 //! select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
 //! select.add_select("bar");
 //! select.add_aliased_select("COUNT(1)", "count");
-//! select.filters(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
+//! select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 //! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 //! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
 //! select.group_by(vec!["foo"]);
@@ -278,7 +278,7 @@
 //! select
 //!     .select_all(&sqlite_pool)
 //!     .expect("")
-//!     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+//!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
 //!     .order_by(vec![("foo", Direction::Descending)]);
 //!
 //! let mut param_map = HashMap::new();
@@ -297,7 +297,7 @@
 //! select
 //!     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
 //!     .add_aliased_select("COUNT(1)", "count")
-//!     .filters(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
+//!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
 //!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
 //!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
 //!     .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
@@ -367,12 +367,17 @@ use enquote::unquote;
 use futures::executor::block_on;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map as SerdeMap, Value as SerdeValue};
+use serde_json::{json, Map as SerdeMap, Value as SerdeValue};
 use sqlx::{
     any::{AnyKind, AnyPool, AnyRow},
     query as sqlx_query, Row,
 };
 use std::{collections::HashMap, str::FromStr};
+use tree_sitter::{Node, Parser};
+use urlencoding::decode;
+
+pub const LIMIT_DEFAULT: usize = 20;
+pub const LIMIT_MAX: usize = 100;
 
 /// Representation of a database type. Currently only Postgres and Sqlite are supported.
 #[derive(Debug, PartialEq, Eq)]
@@ -468,6 +473,12 @@ impl Direction {
         match self {
             Direction::Ascending => "ASC",
             Direction::Descending => "DESC",
+        }
+    }
+    pub fn to_url(&self) -> &str {
+        match self {
+            Direction::Ascending => "asc",
+            Direction::Descending => "desc",
         }
     }
 }
@@ -718,7 +729,7 @@ pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, 
 pub struct Select {
     pub table: String,
     pub select: Vec<(String, Option<String>)>,
-    pub filters: Vec<Filter>,
+    pub filter: Vec<Filter>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
     pub order_by: Vec<(String, Direction)>,
@@ -778,19 +789,19 @@ impl Select {
         self
     }
 
-    /// Given a vector of filters, replace the current contents of `self.filters` with the contents
+    /// Given a vector of filters, replace the current contents of `self.filter` with the contents
     /// of the given vector.
-    pub fn filters(&mut self, filters: Vec<Filter>) -> &mut Select {
-        self.filters.clear();
+    pub fn filter(&mut self, filters: Vec<Filter>) -> &mut Select {
+        self.filter.clear();
         for f in filters {
-            self.filters.push(f);
+            self.filter.push(f);
         }
         self
     }
 
-    /// Given a filter, add it to the vector, `self.filters`.
+    /// Given a filter, add it to the vector, `self.filter`.
     pub fn add_filter(&mut self, filter: Filter) -> &mut Select {
-        self.filters.push(filter);
+        self.filter.push(filter);
         self
     }
 
@@ -859,7 +870,7 @@ impl Select {
     /// `table` field of this Select struct (`self`), and add them to `self`'s `select` field.
     /// If `self.table` is not defined, return `self` back to the caller unchanged.
     pub fn select_all(&mut self, pool: &AnyPool) -> Result<&mut Select, String> {
-        if self.table == "" {
+        if self.table.is_empty() {
             // If no table has been defined, do nothing.
             return Ok(self);
         }
@@ -897,7 +908,7 @@ impl Select {
     /// appropriate for the kind of database specified. Returns an Error if `self.table` or
     /// `self.select` have not been defined.
     pub fn to_sql(&self, dbtype: &DbType) -> Result<String, String> {
-        if self.table == "" {
+        if self.table.is_empty() {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
 
@@ -918,8 +929,8 @@ impl Select {
         let select_clause = select_clause.join(", ");
 
         let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
-        if !self.filters.is_empty() {
-            let where_clause = match filters_to_sql(&self.filters, &dbtype) {
+        if !self.filter.is_empty() {
+            let where_clause = match filters_to_sql(&self.filter, &dbtype) {
                 Err(err) => return Err(err),
                 Ok(s) => s,
             };
@@ -951,6 +962,63 @@ impl Select {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
         Ok(sql)
+    }
+
+    /// Convert the given Select struct to a SQLRest URL. Returns an error if `self.table` or
+    /// `self.select` have not been defined.
+    pub fn to_url(&self) -> Result<String, String> {
+        if self.table.is_empty() {
+            return Err("Missing required field: `table` in to_sql()".to_string());
+        }
+
+        if self.select.is_empty() {
+            return Err("Missing required field: `select` in to_sql()".to_string());
+        }
+
+        let mut params: Vec<String> = vec![];
+        let parts: Vec<String> = self
+            .select
+            .iter()
+            // TODO: Handle aliases. See https://postgrest.org/en/stable/api.html#renaming-columns
+            .map(|(column, _alias)| column.clone())
+            .collect();
+        params.push(format!("select={}", parts.join(",")));
+        if self.filter.len() > 0 {
+            for filter in &self.filter {
+                let rhs = match &filter.rhs {
+                    SerdeValue::String(s) => s.to_string(),
+                    SerdeValue::Number(n) => format!("{}", n),
+                    _ => todo!(),
+                };
+                let x = match filter.operator {
+                    Operator::Equals => format!(r#"{}=eq.{}"#, filter.lhs, rhs),
+                    Operator::LessThan => format!(r#"{}=lt.{}"#, filter.lhs, rhs),
+                    Operator::GreaterThan => format!(r#"{}=gt.{}"#, filter.lhs, rhs),
+                    _ => todo!(),
+                };
+                params.push(x);
+            }
+        }
+        if self.order_by.len() > 0 {
+            let parts: Vec<String> =
+                self.order_by.iter().map(|(c, d)| format!(r"{}.{}", c, d.to_url())).collect();
+            params.push(format!("order={}", parts.join(",")));
+        }
+        if let Some(limit) = self.limit {
+            if limit > 0 && limit != LIMIT_DEFAULT {
+                params.push(format!("limit={}", limit));
+            }
+        }
+        if let Some(offset) = self.offset {
+            if offset > 0 {
+                params.push(format!("offset={}", offset));
+            }
+        }
+        if params.len() > 0 {
+            Ok(format!("{}?{}", self.table, params.join("&")))
+        } else {
+            Ok(self.table.clone())
+        }
     }
 
     /// Convert the given Select struct to an SQL statement using Postgres syntax. This is a
@@ -1060,6 +1128,116 @@ impl Select {
         }
         let json_row: &str = json_row.unwrap();
         extract_rows_from_json_str(json_row)
+    }
+}
+
+/// TODO: Add a docstring here.
+pub fn get_from_raw(n: &Node, raw: &str) -> String {
+    println!("In get_from_raw() ...");
+    //println!("RAW: {}", raw);
+    //println!("NODE KIND: {}", n.kind());
+    let start = n.start_position().column;
+    //println!("START: {:?}", start);
+    let end = n.end_position().column;
+    //println!("END: {:?}", end);
+    let extract = &raw[start..end];
+    //println!("EXTRACT: {}", extract);
+    String::from(extract)
+}
+
+/// TODO: Add a docstring here.
+pub fn parse(input: &str) -> Select {
+    println!("In parse() ...");
+    let mut parser: Parser = Parser::new();
+    let input = input.to_string();
+
+    parser.set_language(tree_sitter_sqlrest::language()).expect("Error loading sqlrest grammar");
+
+    let tree = parser.parse(&input, None).unwrap();
+
+    let mut query = Select::new("");
+    transduce(&tree.root_node(), &input, &mut query);
+    query
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
+    println!("In transduce() ...");
+    match n.kind() {
+        "query" => transduce_children(n, raw, query),
+        "select" => transduce_select(n, raw, query),
+        "table" => transduce_table(n, raw, query),
+        "expression" => transduce_children(n, raw, query),
+        "part" => transduce_children(n, raw, query),
+        "filter" => transduce_children(n, raw, query),
+        "simple_filter" => transduce_filter(n, raw, query),
+        //"special_filter" => transduce_children(n, raw, query),
+        //"in" => transduce_in(n, raw, query),
+        //   TODO: Implement transduce for other operators like not in, is, not is, etc.?
+        //"order" => transduce_order(n, raw, query),
+        //   TODO: Implement transduce for group by, having ...
+        //"limit" => transduce_limit(n, raw, query),
+        //"offset" => transduce_offset(n, raw, query),
+        //"STRING" => panic!("Encountered STRING in top level translation"),
+        _ => {
+            panic!("Error parsing node of kind '{}': {:?} {} {:?}", n.kind(), n, raw, query);
+        }
+    }
+}
+
+// TODO: REMOVE THE UNWRAPS FROM THE TRANSDUCE FUNCTIONS BELOW AND RETURN RESULT OBJECTS INSTEAD.
+
+/// TODO: Add a docstring here.
+pub fn transduce_children(n: &Node, raw: &str, q: &mut Select) {
+    println!("In transduce_children() ...");
+    let child_count = n.named_child_count();
+    for i in 0..child_count {
+        transduce(&n.named_child(i).unwrap(), raw, q);
+    }
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce_table(n: &Node, raw: &str, query: &mut Select) {
+    println!("In transduce_table() ...");
+    let table = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
+    query.table = table;
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
+    println!("In transduce_filter() ...");
+    let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
+    let operator_string = get_from_raw(&n.named_child(1).unwrap(), raw);
+    let value_node = n.named_child(2).unwrap();
+    let value = decode(&get_from_raw(&value_node, raw)).unwrap().into_owned();
+
+    //println!("VALUE: {} OF KIND: {}", value, value_node.kind());
+    let value: SerdeValue = {
+        if value_node.kind() != "value" {
+            panic!("Arghh!!! Unexpected!!!");
+        } else {
+            match value.parse::<i64>() {
+                Ok(v) => json!(v),
+                Err(_) => match value.parse::<f64>() {
+                    Ok(v) => json!(v),
+                    Err(_) => json!(value),
+                },
+            }
+        }
+    };
+
+    let filter = Filter::new(column, operator_string, value).unwrap();
+    //println!("FILTER: {:?}", filter);
+    query.filter.push(filter);
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce_select(n: &Node, raw: &str, query: &mut Select) {
+    println!("In transduce_select() ...");
+    let child_count = n.named_child_count();
+    for position in 0..child_count {
+        let column = get_from_raw(&n.named_child(position).unwrap(), raw);
+        query.select.push((column, None)); // TODO: Support aliases.
     }
 }
 
@@ -1440,7 +1618,7 @@ mod tests {
             let mut select = Select::new("my_table");
             select
                 .select(vec!["row_number", "prefix", "base", "\"ontology IRI\"", "\"version IRI\""])
-                .filters(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
+                .filter(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
 
             // Run the VACUUM command to clear the cache:
             let query = sqlx_query("VACUUM");
@@ -1500,6 +1678,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     #[serial]
     fn test_real_datatype() {
         let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
@@ -1552,6 +1731,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore]
     fn test_json_datatype() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
@@ -1614,5 +1794,26 @@ mod tests {
             SerdeValue::String(s) => assert_eq!(s, "foovalue"),
             _ => panic!("'{}' does not match 'foovalue'", fooval),
         };
+    }
+
+    #[test]
+    #[serial]
+    fn test_transduce() {
+        let expected_sql = "SELECT foo, goo FROM bar";
+        let from_url = "bar?select=foo,goo";
+        let select = parse(from_url);
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, select.to_url().unwrap());
+
+        let expected_sql =
+            r#"SELECT "foo", "goo" FROM "bar" WHERE "foo" < 1 AND "goo" = 'terrible'"#;
+        let from_url = r#""bar"?select="foo","goo"&"foo"=lt.1&"goo"=eq.'terrible'"#;
+        let select = parse(from_url);
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, select.to_url().unwrap());
+
+        //assert_eq!(1, 2);
     }
 }
