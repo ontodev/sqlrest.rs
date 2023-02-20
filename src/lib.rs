@@ -1000,7 +1000,7 @@ impl Select {
                         }
                         format!("({})", list.join(","))
                     }
-                    _ => todo!(),
+                    _ => panic!("RHS of Filter: {:?} is not a string, number, or list", filter),
                 };
 
                 let x = match filter.operator {
@@ -1197,7 +1197,7 @@ pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
         "special_filter" => transduce_children(n, raw, query),
         "in" => transduce_in(n, raw, query, false),
         "not_in" => transduce_in(n, raw, query, true),
-        //   TODO: Implement transduce for other operators like not in, is, not is, etc.?
+        //   TODO: Implement transduce for other operators like is, not is, etc.?
         //"order" => transduce_order(n, raw, query),
         //   TODO: Implement transduce for group by, having ...
         //"limit" => transduce_limit(n, raw, query),
@@ -1236,7 +1236,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
     let value = decode(&get_from_raw(&value_node, raw)).unwrap().into_owned();
     let value: SerdeValue = {
         if value_node.kind() != "value" {
-            panic!("Arghh!!! Unexpected!!!");
+            panic!("Arghh!!! Unexpected Node kind: {}!!!", value_node.kind());
         } else {
             match value.parse::<i64>() {
                 Ok(v) => json!(v),
@@ -1876,44 +1876,49 @@ mod tests {
 
         let expected_sql = "SELECT foo1, foo9 \
                FROM bar \
-               WHERE foo1 > 0 \
-                 AND foo1 < 10 \
-                 AND foo2 <= 20 \
-                 AND foo2 >= 5 \
-                 AND foo3 LIKE 'alpha' \
-                 AND foo5 ILIKE 'abby_normal' \
-                 AND foo7 IS NOT DISTINCT FROM NULL \
-                 AND foo9 = 'terrible' \
-                 AND \"foo10\" IN ('A', 'B', 'C') \
-                 AND \"foo11\" NOT IN (1, 2, 3) \
-                 AND \"foo12\" IN (foo1, foo2, foo3)";
+               WHERE foo1 = 0 \
+                 AND foo2 <> '10' \
+                 AND foo3 < 20 \
+                 AND foo4 > 5 \
+                 AND foo5 <= 30 \
+                 AND foo6 >= 60 \
+                 AND foo7 LIKE 'alpha' \
+                 AND foo8 NOT LIKE 'abby_normal' \
+                 AND foo9 ILIKE 'beta' \
+                 AND foo10 NOT ILIKE foo9 \
+                 AND foo11 IS NOT DISTINCT FROM NULL \
+                 AND foo12 IS DISTINCT FROM NULL \
+                 AND foo13 = 'terrible' \
+                 AND \"foo14\" IN ('A', 'B', 'C') \
+                 AND \"foo15\" NOT IN (1, 2, 3) \
+                 AND \"foo16\" IN (foo1, foo2, foo3)";
 
-        // TODO: add the following once they have been added to the grammar:
-        // &foo4=not_like.'beta'\
-        // &foo6=not_ilike.'bobby_orr'\
-        // &foo8=not_is.NULL\
+        // TODO: Implement transduce for: order by, group by, having, limit, offset, etc.
         // TODO: Make 'select=' optional (defaulting to '*' ?)
         // TODO: Allow spaces in column names and in literal strings.
         let from_url = "bar?\
              select=foo1,foo9\
-             &foo1=gt.0\
-             &foo1=lt.10\
-             &foo2=lte.20\
-             &foo2=gte.5\
-             &foo3=like.'alpha'\
-             &foo5=ilike.'abby_normal'\
-             &foo7=is.NULL\
-             &foo9=eq.'terrible'\
-             &\"foo10\"=in.('A','B','C')\
-             &\"foo11\"=not_in.(1,2,3)\
-             &\"foo12\"=in.(foo1,foo2,foo3)";
+             &foo1=eq.0\
+             &foo2=not_eq.'10'\
+             &foo3=lt.20\
+             &foo4=gt.5\
+             &foo5=lte.30\
+             &foo6=gte.60\
+             &foo7=like.'alpha'\
+             &foo8=not_like.'abby_normal'\
+             &foo9=ilike.'beta'\
+             &foo10=not_ilike.foo9\
+             &foo11=is.NULL\
+             &foo12=not_is.NULL\
+             &foo13=eq.'terrible'\
+             &\"foo14\"=in.('A','B','C')\
+             &\"foo15\"=not_in.(1,2,3)\
+             &\"foo16\"=in.(foo1,foo2,foo3)";
 
         //println!("FROM URL: {}", from_url);
         let select = parse(&from_url);
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
-
-        // TODO: Test order by, group by, having, limit, offset, etc.
 
         //assert_eq!(1, 2);
     }
