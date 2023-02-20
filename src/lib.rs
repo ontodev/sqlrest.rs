@@ -990,10 +990,22 @@ impl Select {
                     SerdeValue::Number(n) => format!("{}", n),
                     _ => todo!(),
                 };
+
                 let x = match filter.operator {
                     Operator::Equals => format!(r#"{}=eq.{}"#, filter.lhs, rhs),
+                    Operator::NotEquals => format!(r#"{}=not_eq.{}"#, filter.lhs, rhs),
                     Operator::LessThan => format!(r#"{}=lt.{}"#, filter.lhs, rhs),
                     Operator::GreaterThan => format!(r#"{}=gt.{}"#, filter.lhs, rhs),
+                    Operator::LessThanEquals => format!(r#"{}=lte.{}"#, filter.lhs, rhs),
+                    Operator::GreaterThanEquals => format!(r#"{}=gte.{}"#, filter.lhs, rhs),
+                    Operator::Like => format!(r#"{}=like.{}"#, filter.lhs, rhs),
+                    Operator::NotLike => format!(r#"{}=not_like.{}"#, filter.lhs, rhs),
+                    Operator::ILike => format!(r#"{}=ilike.{}"#, filter.lhs, rhs),
+                    Operator::NotILike => format!(r#"{}=not_ilike.{}"#, filter.lhs, rhs),
+                    Operator::Is => format!(r#"{}=is.{}"#, filter.lhs, rhs),
+                    Operator::IsNot => format!(r#"{}=not_is.{}"#, filter.lhs, rhs),
+                    //Operator::In => format!(r#"{}=in.{}"#, filter.lhs, rhs),
+                    //Operator::NotIn => format!(r#"{}=not_in.{}"#, filter.lhs, rhs),
                     _ => todo!(),
                 };
                 params.push(x);
@@ -1806,14 +1818,42 @@ mod tests {
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        let expected_sql =
-            r#"SELECT "foo", "goo" FROM "bar" WHERE "foo" < 1 AND "goo" = 'terrible'"#;
-        let from_url = r#""bar"?select="foo","goo"&"foo"=lt.1&"goo"=eq.'terrible'"#;
-        let select = parse(from_url);
-        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        let expected_sql = "SELECT foo1, foo9 \
+               FROM bar \
+               WHERE foo1 > 0 \
+                 AND foo1 < 10 \
+                 AND foo2 <= 20 \
+                 AND foo2 >= 5 \
+                 AND foo3 LIKE 'alpha' \
+                 AND foo5 ILIKE 'abby_normal' \
+                 AND foo7 IS NOT DISTINCT FROM NULL \
+                 AND foo9 = 'terrible'";
+        //       AND \"foo10\" IN ('A', 'B', 'C')
+        //       AND \"foo11\" NOT IN (1, 2, 3)
+
+        // TODO: add the following once they have been added to the grammar:
+        // &foo4=not_like.'beta'\
+        // &foo6=not_ilike.'bobby_orr'\
+        // &foo8=not_is.NULL\
+        // TODO: Add filters for IN, NOT IN
+        // TODO: Allow spaces in column names and in literal strings.
+        let from_url = "bar?\
+             select=foo1,foo9\
+             &foo1=gt.0\
+             &foo1=lt.10\
+             &foo2=lte.20\
+             &foo2=gte.5\
+             &foo3=like.'alpha'\
+             &foo5=ilike.'abby_normal'\
+             &foo7=is.NULL\
+             &foo9=eq.'terrible'";
+        println!("FROM URL: {}", from_url);
+        let select = parse(&from_url);
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        //assert_eq!(1, 2);
+        // TODO: Test order by, group by, having, limit, offset, etc.
+
+        assert_eq!(1, 2);
     }
 }
