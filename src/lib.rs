@@ -467,6 +467,21 @@ pub enum Direction {
     Descending,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseDirectionError;
+
+impl FromStr for Direction {
+    type Err = ParseDirectionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "asc" | "ascending" => Ok(Direction::Ascending),
+            "desc" | "descending" => Ok(Direction::Descending),
+            _ => Err(ParseDirectionError),
+        }
+    }
+}
+
 impl Direction {
     /// Converts a Direction enum to a SQL string.
     pub fn to_sql(&self) -> &str {
@@ -1197,12 +1212,10 @@ pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
         "special_filter" => transduce_children(n, raw, query),
         "in" => transduce_in(n, raw, query, false),
         "not_in" => transduce_in(n, raw, query, true),
-        //   TODO: Implement transduce for other operators like is, not is, etc.?
-        //"order" => transduce_order(n, raw, query),
-        //   TODO: Implement transduce for group by, having ...
-        //"limit" => transduce_limit(n, raw, query),
-        //"offset" => transduce_offset(n, raw, query),
-        //"STRING" => panic!("Encountered STRING in top level translation"),
+        "order" => transduce_order(n, raw, query),
+        "limit" => transduce_limit(n, raw, query),
+        "offset" => transduce_offset(n, raw, query),
+        "STRING" => panic!("Encountered STRING in top level translation"),
         _ => {
             panic!("Error parsing node of kind '{}': {:?} {} {:?}", n.kind(), n, raw, query);
         }
@@ -1307,6 +1320,49 @@ pub fn transduce_select(n: &Node, raw: &str, query: &mut Select) {
         let column = get_from_raw(&n.named_child(position).unwrap(), raw);
         query.select.push((column, None)); // TODO: Support aliases.
     }
+}
+
+pub fn transduce_order(n: &Node, raw: &str, query: &mut Select) {
+    let child_count = n.named_child_count();
+    let mut position = 0;
+
+    while position < child_count {
+        let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
+        position = position + 1;
+        if position < child_count && n.named_child(position).unwrap().kind().eq("ordering") {
+            let ordering_string = get_from_raw(&n.named_child(position).unwrap(), raw);
+            let ordering = Direction::from_str(&ordering_string);
+            match ordering {
+                Ok(o) => {
+                    position = position + 1;
+                    let order = (column, o);
+                    query.add_order_by(order);
+                }
+                Err(_) => {
+                    //tracing::warn!("Unhandled order param '{}'", ordering_string);
+                    panic!("Unhandled order param '{}'", ordering_string);
+                }
+            };
+        } else {
+            let ordering = Direction::Ascending; //default ordering is ASC
+            let order = (column, ordering);
+            query.add_order_by(order);
+        }
+    }
+}
+
+/// TODO: Add a docstring here:
+pub fn transduce_offset(n: &Node, raw: &str, query: &mut Select) {
+    let offset_string = get_from_raw(&n.named_child(0).unwrap(), raw);
+    let offset: usize = offset_string.parse().unwrap();
+    query.offset(offset);
+}
+
+/// TODO: Add a docstring here:
+pub fn transduce_limit(n: &Node, raw: &str, query: &mut Select) {
+    let limit_string = get_from_raw(&n.named_child(0).unwrap(), raw);
+    let limit: usize = limit_string.parse().unwrap();
+    query.limit(limit);
 }
 
 /// Given a database type and two Select structs, generate an SQL statement such that the
@@ -1891,11 +1947,15 @@ mod tests {
                  AND foo13 = 'terrible' \
                  AND \"foo14\" IN ('A', 'B', 'C') \
                  AND \"foo15\" NOT IN (1, 2, 3) \
-                 AND \"foo16\" IN (foo1, foo2, foo3)";
+                 AND \"foo16\" IN (foo1, foo2, foo3) \
+                 ORDER BY foo1 DESC \
+                 LIMIT 10 \
+                 OFFSET 30";
 
-        // TODO: Implement transduce for: order by, group by, having, limit, offset, etc.
-        // TODO: Make 'select=' optional (defaulting to '*' ?)
+        // TODO: Allow aggregates in select clause
         // TODO: Allow spaces in column names and in literal strings.
+        // TODO: Implement transduce for: group by and having
+        // TODO: Make 'select=' optional (defaulting to '*' ?)
         let from_url = "bar?\
              select=foo1,foo9\
              &foo1=eq.0\
@@ -1913,7 +1973,10 @@ mod tests {
              &foo13=eq.'terrible'\
              &\"foo14\"=in.('A','B','C')\
              &\"foo15\"=not_in.(1,2,3)\
-             &\"foo16\"=in.(foo1,foo2,foo3)";
+             &\"foo16\"=in.(foo1,foo2,foo3)\
+             &order=foo1.desc\
+             &limit=10\
+             &offset=30";
 
         //println!("FROM URL: {}", from_url);
         let select = parse(&from_url);
