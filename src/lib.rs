@@ -985,12 +985,19 @@ impl Select {
         params.push(format!("select={}", parts.join(",")));
         if self.filter.len() > 0 {
             for filter in &self.filter {
-                println!("Filter: {:?}", filter);
+                //println!("Filter: {:?}", filter);
                 let rhs = match &filter.rhs {
                     SerdeValue::String(s) => s.to_string(),
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
-                        let list: Vec<&str> = v.iter().map(|i| i.as_str().unwrap()).collect();
+                        let mut list = vec![];
+                        for item in v {
+                            match item {
+                                SerdeValue::String(s) => list.push(s.to_string()),
+                                SerdeValue::Number(n) => list.push(n.to_string()),
+                                _ => panic!("Arrrggghhhhh!!!!"),
+                            };
+                        }
                         format!("({})", list.join(","))
                     }
                     _ => todo!(),
@@ -1010,8 +1017,7 @@ impl Select {
                     Operator::Is => format!(r#"{}=is.{}"#, filter.lhs, rhs),
                     Operator::IsNot => format!(r#"{}=not_is.{}"#, filter.lhs, rhs),
                     Operator::In => format!(r#"{}=in.{}"#, filter.lhs, rhs),
-                    //Operator::NotIn => format!(r#"{}=not_in.{}"#, filter.lhs, rhs),
-                    _ => todo!(),
+                    Operator::NotIn => format!(r#"{}=not_in.{}"#, filter.lhs, rhs),
                 };
                 params.push(x);
             }
@@ -1189,7 +1195,8 @@ pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
         "filter" => transduce_children(n, raw, query),
         "simple_filter" => transduce_filter(n, raw, query),
         "special_filter" => transduce_children(n, raw, query),
-        "in" => transduce_in(n, raw, query),
+        "in" => transduce_in(n, raw, query, false),
+        "not_in" => transduce_in(n, raw, query, true),
         //   TODO: Implement transduce for other operators like not in, is, not is, etc.?
         //"order" => transduce_order(n, raw, query),
         //   TODO: Implement transduce for group by, having ...
@@ -1270,22 +1277,25 @@ pub fn transduce_list(n: &Node, raw: &str) -> String {
 }
 
 /// TODO: Add a docstring here.
-pub fn transduce_in(n: &Node, raw: &str, query: &mut Select) {
+pub fn transduce_in(n: &Node, raw: &str, query: &mut Select, negate: bool) {
     println!("In transduce_in() ...");
     let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
     let values = transduce_list(&n.named_child(1).unwrap(), raw);
     let values = values.strip_prefix("(").and_then(|v| v.strip_suffix(")")).unwrap();
-    let values: Vec<String> = values.split(',').map(|v| format!("\"{}\"", v)).collect();
-    let values = values.join(",");
-    let values = format!("[{}]", values);
-    let values = match serde_json::from_str::<SerdeValue>(&values) {
-        Err(e) => panic!("{}", e.to_string()),
-        Ok(values) => match values {
-            SerdeValue::Array(values) => values,
-            _ => panic!("Expected array. Got: {}", values),
-        },
-    };
-    let filter = Filter::new(column, "in".to_string(), SerdeValue::Array(values)).unwrap();
+    let values: Vec<&str> = values.split(',').collect();
+    let mut choices = vec![];
+    for value in values {
+        match value.parse::<i64>() {
+            Ok(v) => choices.push(json!(v)),
+            Err(_) => match value.parse::<f64>() {
+                Ok(v) => choices.push(json!(v)),
+                Err(_) => choices.push(json!(value)),
+            },
+        }
+    }
+
+    let operator_str = if negate { String::from("not_in") } else { String::from("in") };
+    let filter = Filter::new(column, operator_str, SerdeValue::Array(choices)).unwrap();
     query.filter.push(filter);
 }
 
@@ -1874,14 +1884,15 @@ mod tests {
                  AND foo5 ILIKE 'abby_normal' \
                  AND foo7 IS NOT DISTINCT FROM NULL \
                  AND foo9 = 'terrible' \
-                 AND \"foo10\" IN ('A', 'B', 'C')";
-        //       AND \"foo11\" NOT IN (1, 2, 3)
+                 AND \"foo10\" IN ('A', 'B', 'C') \
+                 AND \"foo11\" NOT IN (1, 2, 3) \
+                 AND \"foo12\" IN (foo1, foo2, foo3)";
 
-        // TODO: Add filters for IN (DONE), NOT IN
         // TODO: add the following once they have been added to the grammar:
         // &foo4=not_like.'beta'\
         // &foo6=not_ilike.'bobby_orr'\
         // &foo8=not_is.NULL\
+        // TODO: Make 'select=' optional (defaulting to '*' ?)
         // TODO: Allow spaces in column names and in literal strings.
         let from_url = "bar?\
              select=foo1,foo9\
@@ -1893,8 +1904,11 @@ mod tests {
              &foo5=ilike.'abby_normal'\
              &foo7=is.NULL\
              &foo9=eq.'terrible'\
-             &\"foo10\"=in.('A','B','C')";
-        println!("FROM URL: {}", from_url);
+             &\"foo10\"=in.('A','B','C')\
+             &\"foo11\"=not_in.(1,2,3)\
+             &\"foo12\"=in.(foo1,foo2,foo3)";
+
+        //println!("FROM URL: {}", from_url);
         let select = parse(&from_url);
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
