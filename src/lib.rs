@@ -985,9 +985,14 @@ impl Select {
         params.push(format!("select={}", parts.join(",")));
         if self.filter.len() > 0 {
             for filter in &self.filter {
+                println!("Filter: {:?}", filter);
                 let rhs = match &filter.rhs {
                     SerdeValue::String(s) => s.to_string(),
                     SerdeValue::Number(n) => format!("{}", n),
+                    SerdeValue::Array(v) => {
+                        let list: Vec<&str> = v.iter().map(|i| i.as_str().unwrap()).collect();
+                        format!("({})", list.join(","))
+                    }
                     _ => todo!(),
                 };
 
@@ -1004,7 +1009,7 @@ impl Select {
                     Operator::NotILike => format!(r#"{}=not_ilike.{}"#, filter.lhs, rhs),
                     Operator::Is => format!(r#"{}=is.{}"#, filter.lhs, rhs),
                     Operator::IsNot => format!(r#"{}=not_is.{}"#, filter.lhs, rhs),
-                    //Operator::In => format!(r#"{}=in.{}"#, filter.lhs, rhs),
+                    Operator::In => format!(r#"{}=in.{}"#, filter.lhs, rhs),
                     //Operator::NotIn => format!(r#"{}=not_in.{}"#, filter.lhs, rhs),
                     _ => todo!(),
                 };
@@ -1174,7 +1179,7 @@ pub fn parse(input: &str) -> Select {
 
 /// TODO: Add a docstring here.
 pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
-    println!("In transduce() ...");
+    println!("In transduce() for {} ...", n.kind());
     match n.kind() {
         "query" => transduce_children(n, raw, query),
         "select" => transduce_select(n, raw, query),
@@ -1183,8 +1188,8 @@ pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
         "part" => transduce_children(n, raw, query),
         "filter" => transduce_children(n, raw, query),
         "simple_filter" => transduce_filter(n, raw, query),
-        //"special_filter" => transduce_children(n, raw, query),
-        //"in" => transduce_in(n, raw, query),
+        "special_filter" => transduce_children(n, raw, query),
+        "in" => transduce_in(n, raw, query),
         //   TODO: Implement transduce for other operators like not in, is, not is, etc.?
         //"order" => transduce_order(n, raw, query),
         //   TODO: Implement transduce for group by, having ...
@@ -1222,8 +1227,6 @@ pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
     let operator_string = get_from_raw(&n.named_child(1).unwrap(), raw);
     let value_node = n.named_child(2).unwrap();
     let value = decode(&get_from_raw(&value_node, raw)).unwrap().into_owned();
-
-    //println!("VALUE: {} OF KIND: {}", value, value_node.kind());
     let value: SerdeValue = {
         if value_node.kind() != "value" {
             panic!("Arghh!!! Unexpected!!!");
@@ -1239,7 +1242,50 @@ pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
     };
 
     let filter = Filter::new(column, operator_string, value).unwrap();
-    //println!("FILTER: {:?}", filter);
+    query.filter.push(filter);
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce_list(n: &Node, raw: &str) -> String {
+    println!("In transduce_in() ...");
+    let quoted_strings = match n.kind() {
+        "list" => false,
+        "list_of_strings" => true,
+        _ => panic!("Not a valid list"),
+    };
+
+    let mut vec = Vec::new();
+
+    let child_count = n.named_child_count();
+    for i in 0..child_count {
+        let value = decode(&get_from_raw(&n.named_child(i).unwrap(), raw)).unwrap().into_owned();
+        if quoted_strings {
+            let quoted_string = format!("{}", value);
+            vec.push(quoted_string);
+        } else {
+            vec.push(value);
+        }
+    }
+    format!("({})", vec.join(","))
+}
+
+/// TODO: Add a docstring here.
+pub fn transduce_in(n: &Node, raw: &str, query: &mut Select) {
+    println!("In transduce_in() ...");
+    let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
+    let values = transduce_list(&n.named_child(1).unwrap(), raw);
+    let values = values.strip_prefix("(").and_then(|v| v.strip_suffix(")")).unwrap();
+    let values: Vec<String> = values.split(',').map(|v| format!("\"{}\"", v)).collect();
+    let values = values.join(",");
+    let values = format!("[{}]", values);
+    let values = match serde_json::from_str::<SerdeValue>(&values) {
+        Err(e) => panic!("{}", e.to_string()),
+        Ok(values) => match values {
+            SerdeValue::Array(values) => values,
+            _ => panic!("Expected array. Got: {}", values),
+        },
+    };
+    let filter = Filter::new(column, "in".to_string(), SerdeValue::Array(values)).unwrap();
     query.filter.push(filter);
 }
 
@@ -1827,15 +1873,15 @@ mod tests {
                  AND foo3 LIKE 'alpha' \
                  AND foo5 ILIKE 'abby_normal' \
                  AND foo7 IS NOT DISTINCT FROM NULL \
-                 AND foo9 = 'terrible'";
-        //       AND \"foo10\" IN ('A', 'B', 'C')
+                 AND foo9 = 'terrible' \
+                 AND \"foo10\" IN ('A', 'B', 'C')";
         //       AND \"foo11\" NOT IN (1, 2, 3)
 
+        // TODO: Add filters for IN (DONE), NOT IN
         // TODO: add the following once they have been added to the grammar:
         // &foo4=not_like.'beta'\
         // &foo6=not_ilike.'bobby_orr'\
         // &foo8=not_is.NULL\
-        // TODO: Add filters for IN, NOT IN
         // TODO: Allow spaces in column names and in literal strings.
         let from_url = "bar?\
              select=foo1,foo9\
@@ -1846,7 +1892,8 @@ mod tests {
              &foo3=like.'alpha'\
              &foo5=ilike.'abby_normal'\
              &foo7=is.NULL\
-             &foo9=eq.'terrible'";
+             &foo9=eq.'terrible'\
+             &\"foo10\"=in.('A','B','C')";
         println!("FROM URL: {}", from_url);
         let select = parse(&from_url);
         assert_eq!(expected_sql, select.to_postgres().unwrap());
@@ -1854,6 +1901,6 @@ mod tests {
 
         // TODO: Test order by, group by, having, limit, offset, etc.
 
-        assert_eq!(1, 2);
+        //assert_eq!(1, 2);
     }
 }
