@@ -1938,9 +1938,9 @@ mod tests {
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        let expected_sql = "SELECT foo1, foo2, foo5 \
+        let expected_sql = "SELECT \"foo1\", foo2, foo5 \
                FROM bar \
-               WHERE foo1 = 0 \
+               WHERE \"foo1\" = 0 \
                  AND foo2 <> '10' \
                  AND foo3 < 20 \
                  AND foo4 > 5 \
@@ -1955,17 +1955,17 @@ mod tests {
                  AND foo13 = 'terrible' \
                  AND \"foo14\" IN ('A', 'B', 'C') \
                  AND \"foo15\" NOT IN (1, 2, 3) \
-                 AND \"foo16\" IN (foo1, foo2, foo3) \
-                 ORDER BY foo1 DESC, foo2 ASC, foo5 DESC \
+                 AND \"foo16\" IN (\"foo1\", foo2, foo3) \
+                 ORDER BY \"foo1\" DESC, foo2 ASC, foo5 DESC \
                  LIMIT 10 \
                  OFFSET 30";
 
-        // TODO: Allow aggregates in select clause.
         // TODO: Allow spaces in column names and in literal strings.
+        // TODO: Allow aggregates in select clause.
         // TODO: Implement transduce for group by and having.
         let from_url = "bar?\
-             select=foo1,foo2,foo5\
-             &foo1=eq.0\
+             select=\"foo1\",foo2,foo5\
+             &\"foo1\"=eq.0\
              &foo2=not_eq.'10'\
              &foo3=lt.20\
              &foo4=gt.5\
@@ -1980,8 +1980,8 @@ mod tests {
              &foo13=eq.'terrible'\
              &\"foo14\"=in.('A','B','C')\
              &\"foo15\"=not_in.(1,2,3)\
-             &\"foo16\"=in.(foo1,foo2,foo3)\
-             &order=foo1.desc,foo2.asc,foo5.desc\
+             &\"foo16\"=in.(\"foo1\",foo2,foo3)\
+             &order=\"foo1\".desc,foo2.asc,foo5.desc\
              &limit=10\
              &offset=30";
 
