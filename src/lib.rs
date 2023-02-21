@@ -2022,6 +2022,6 @@ mod tests {
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        assert_eq!(1, 2);
+        //assert_eq!(1, 2);
     }
 }

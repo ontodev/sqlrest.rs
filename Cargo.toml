@@ -15,5 +15,8 @@ serde = { version = "1.0", features = ["derive"] }
 serial_test = "1.0.0"
 sqlx = { version = "0.6", features = [ "runtime-async-std-rustls", "any", "postgres", "sqlite" ] }
 tree-sitter = "~0.20.6"
-tree-sitter-sqlrest = { path = "../tree-sitter-sqlrest" }
 urlencoding = "2.1.2"
+
+[dependencies.tree-sitter-sqlrest]
+git = "https://github.com/ontodev/tree-sitter-sqlrest"
+rev = "0efbeb4ba0c77f8a8f26453e54c3cd3a6e1eb181"
