@@ -927,21 +927,22 @@ impl Select {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
 
+        let select_clause;
         if self.select.is_empty() {
-            return Err("Missing required field: `select` in to_sql()".to_string());
+            select_clause = String::from("*");
+        } else {
+            let mut select_columns = vec![];
+            for (column, alias) in &self.select {
+                select_columns.push(format!("{}{}", column, {
+                    if let Some(alias) = alias {
+                        format!(" AS {}", alias)
+                    } else {
+                        "".to_string()
+                    }
+                }));
+            }
+            select_clause = select_columns.join(", ");
         }
-
-        let mut select_clause = vec![];
-        for (column, alias) in &self.select {
-            select_clause.push(format!("{}{}", column, {
-                if let Some(alias) = alias {
-                    format!(" AS {}", alias)
-                } else {
-                    "".to_string()
-                }
-            }));
-        }
-        let select_clause = select_clause.join(", ");
 
         let mut sql = format!("SELECT {} FROM {}", select_clause, self.table);
         if !self.filter.is_empty() {
@@ -986,10 +987,6 @@ impl Select {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
 
-        if self.select.is_empty() {
-            return Err("Missing required field: `select` in to_sql()".to_string());
-        }
-
         let mut params: Vec<String> = vec![];
         let parts: Vec<String> = self
             .select
@@ -997,7 +994,10 @@ impl Select {
             // TODO: Handle aliases. See https://postgrest.org/en/stable/api.html#renaming-columns
             .map(|(column, _alias)| column.clone())
             .collect();
-        params.push(format!("select={}", parts.join(",")));
+
+        if self.select.len() > 0 {
+            params.push(format!("select={}", parts.join(",")));
+        }
         if self.filter.len() > 0 {
             for filter in &self.filter {
                 //println!("Filter: {:?}", filter);
@@ -1329,7 +1329,6 @@ pub fn transduce_order(n: &Node, raw: &str, query: &mut Select) {
     while position < child_count {
         let column =
             decode(&get_from_raw(&n.named_child(position).unwrap(), raw)).unwrap().into_owned();
-        println!("COLUMN: {}", column);
         position = position + 1;
         if position < child_count && n.named_child(position).unwrap().kind().eq("ordering") {
             let ordering_string = get_from_raw(&n.named_child(position).unwrap(), raw);
@@ -1932,7 +1931,14 @@ mod tests {
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        let expected_sql = "SELECT foo1, foo2 \
+        let expected_sql = "SELECT * FROM bar";
+        let from_url = "bar";
+        let select = parse(from_url);
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, select.to_url().unwrap());
+
+        let expected_sql = "SELECT foo1, foo2, foo5 \
                FROM bar \
                WHERE foo1 = 0 \
                  AND foo2 <> '10' \
@@ -1950,16 +1956,15 @@ mod tests {
                  AND \"foo14\" IN ('A', 'B', 'C') \
                  AND \"foo15\" NOT IN (1, 2, 3) \
                  AND \"foo16\" IN (foo1, foo2, foo3) \
-                 ORDER BY foo1 DESC, foo2 ASC \
+                 ORDER BY foo1 DESC, foo2 ASC, foo5 DESC \
                  LIMIT 10 \
                  OFFSET 30";
 
         // TODO: Allow aggregates in select clause.
         // TODO: Allow spaces in column names and in literal strings.
         // TODO: Implement transduce for group by and having.
-        // TODO: Make 'select=' optional (defaulting to '*' ?).
         let from_url = "bar?\
-             select=foo1,foo2\
+             select=foo1,foo2,foo5\
              &foo1=eq.0\
              &foo2=not_eq.'10'\
              &foo3=lt.20\
@@ -1976,7 +1981,7 @@ mod tests {
              &\"foo14\"=in.('A','B','C')\
              &\"foo15\"=not_in.(1,2,3)\
              &\"foo16\"=in.(foo1,foo2,foo3)\
-             &order=foo1.desc,foo2.asc\
+             &order=foo1.desc,foo2.asc,foo5.desc\
              &limit=10\
              &offset=30";
 
