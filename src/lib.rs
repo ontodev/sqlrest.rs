@@ -986,6 +986,11 @@ impl Select {
         if self.table.is_empty() {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
+        if !self.group_by.is_empty() || !self.having.is_empty() {
+            return Err(
+                "GROUP BY / HAVING clauses are not supported in Select::to_url()".to_string()
+            );
+        }
 
         let mut params: Vec<String> = vec![];
         let parts: Vec<String> = self
@@ -1002,13 +1007,29 @@ impl Select {
             for filter in &self.filter {
                 //println!("Filter: {:?}", filter);
                 let rhs = match &filter.rhs {
-                    SerdeValue::String(s) => s.to_string(),
+                    SerdeValue::String(s) => {
+                        let s = unquote(&s).unwrap_or(s.clone());
+                        if s.contains(char::is_whitespace) || s.chars().all(char::is_numeric) {
+                            format!("\"{}\"", s)
+                        } else {
+                            s.to_lowercase()
+                        }
+                    }
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
                         let mut list = vec![];
                         for item in v {
                             match item {
-                                SerdeValue::String(s) => list.push(s.to_string()),
+                                SerdeValue::String(s) => {
+                                    let s = unquote(&s).unwrap_or(s.clone());
+                                    if s.contains(char::is_whitespace)
+                                        || s.chars().all(char::is_numeric)
+                                    {
+                                        list.push(format!("\"{}\"", s));
+                                    } else {
+                                        list.push(s.to_lowercase());
+                                    }
+                                }
                                 SerdeValue::Number(n) => list.push(n.to_string()),
                                 _ => panic!("Arrrggghhhhh!!!!"),
                             };
@@ -1255,7 +1276,16 @@ pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
                 Ok(v) => json!(v),
                 Err(_) => match value.parse::<f64>() {
                     Ok(v) => json!(v),
-                    Err(_) => json!(value),
+                    Err(_) => {
+                        let final_value;
+                        if value.to_lowercase() == "null" {
+                            final_value = value.to_uppercase();
+                        } else {
+                            let unquoted_value = unquote(&value).unwrap_or(value.to_string());
+                            final_value = format!("'{}'", unquoted_value);
+                        }
+                        json!(final_value)
+                    }
                 },
             }
         }
@@ -1266,7 +1296,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
 }
 
 /// TODO: Add a docstring here.
-pub fn transduce_list(n: &Node, raw: &str) -> String {
+pub fn transduce_list(n: &Node, raw: &str) -> Vec<String> {
     println!("In transduce_in() ...");
     let quoted_strings = match n.kind() {
         "list" => false,
@@ -1286,7 +1316,7 @@ pub fn transduce_list(n: &Node, raw: &str) -> String {
             vec.push(value);
         }
     }
-    format!("({})", vec.join(","))
+    vec
 }
 
 /// TODO: Add a docstring here.
@@ -1294,15 +1324,22 @@ pub fn transduce_in(n: &Node, raw: &str, query: &mut Select, negate: bool) {
     println!("In transduce_in() ...");
     let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
     let values = transduce_list(&n.named_child(1).unwrap(), raw);
-    let values = values.strip_prefix("(").and_then(|v| v.strip_suffix(")")).unwrap();
-    let values: Vec<&str> = values.split(',').collect();
     let mut choices = vec![];
     for value in values {
         match value.parse::<i64>() {
             Ok(v) => choices.push(json!(v)),
             Err(_) => match value.parse::<f64>() {
                 Ok(v) => choices.push(json!(v)),
-                Err(_) => choices.push(json!(value)),
+                Err(_) => {
+                    let final_value;
+                    if value.to_lowercase() == "null" {
+                        final_value = value.to_uppercase();
+                    } else {
+                        let unquoted_value = unquote(&value).unwrap_or(value.to_string());
+                        final_value = format!("'{}'", unquoted_value);
+                    }
+                    choices.push(json!(final_value));
+                }
             },
         }
     }
@@ -1317,7 +1354,8 @@ pub fn transduce_select(n: &Node, raw: &str, query: &mut Select) {
     println!("In transduce_select() ...");
     let child_count = n.named_child_count();
     for position in 0..child_count {
-        let column = get_from_raw(&n.named_child(position).unwrap(), raw);
+        let column =
+            decode(&get_from_raw(&n.named_child(position).unwrap(), raw)).unwrap().into_owned();
         query.select.push((column, None)); // TODO: Support aliases.
     }
 }
@@ -1938,54 +1976,48 @@ mod tests {
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
 
-        let expected_sql = "SELECT \"foo1\", foo2, foo5 \
-               FROM bar \
-               WHERE \"foo1\" = 0 \
-                 AND foo2 <> '10' \
+        let expected_sql = "SELECT foo1, \"foo 2\", foo5 \
+               FROM \"a bar\" \
+               WHERE foo1 = 0 \
+                 AND \"foo 2\" <> '10' \
                  AND foo3 < 20 \
                  AND foo4 > 5 \
                  AND foo5 <= 30 \
                  AND foo6 >= 60 \
                  AND foo7 LIKE 'alpha' \
-                 AND foo8 NOT LIKE 'abby_normal' \
+                 AND foo8 NOT LIKE 'abby normal' \
                  AND foo9 ILIKE 'beta' \
-                 AND foo10 NOT ILIKE foo9 \
+                 AND foo10 NOT ILIKE 'gamma' \
                  AND foo11 IS NOT DISTINCT FROM NULL \
                  AND foo12 IS DISTINCT FROM NULL \
                  AND foo13 = 'terrible' \
-                 AND \"foo14\" IN ('A', 'B', 'C') \
-                 AND \"foo15\" NOT IN (1, 2, 3) \
-                 AND \"foo16\" IN (\"foo1\", foo2, foo3) \
-                 ORDER BY \"foo1\" DESC, foo2 ASC, foo5 DESC \
+                 AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
+                 AND foo15 NOT IN (1, 2, 3) \
+                 ORDER BY foo1 DESC, \"foo 2\" ASC, foo5 DESC \
                  LIMIT 10 \
                  OFFSET 30";
 
-        // TODO: Allow spaces in column names and in literal strings.
-        // TODO: Allow aggregates in select clause.
-        // TODO: Implement transduce for group by and having.
-        let from_url = "bar?\
-             select=\"foo1\",foo2,foo5\
-             &\"foo1\"=eq.0\
-             &foo2=not_eq.'10'\
+        let from_url = "\"a bar\"?\
+             select=foo1,\"foo 2\",foo5\
+             &foo1=eq.0\
+             &\"foo 2\"=not_eq.\"10\"\
              &foo3=lt.20\
              &foo4=gt.5\
              &foo5=lte.30\
              &foo6=gte.60\
-             &foo7=like.'alpha'\
-             &foo8=not_like.'abby_normal'\
-             &foo9=ilike.'beta'\
-             &foo10=not_ilike.foo9\
-             &foo11=is.NULL\
-             &foo12=not_is.NULL\
-             &foo13=eq.'terrible'\
-             &\"foo14\"=in.('A','B','C')\
-             &\"foo15\"=not_in.(1,2,3)\
-             &\"foo16\"=in.(\"foo1\",foo2,foo3)\
-             &order=\"foo1\".desc,foo2.asc,foo5.desc\
+             &foo7=like.alpha\
+             &foo8=not_like.\"abby normal\"\
+             &foo9=ilike.beta\
+             &foo10=not_ilike.gamma\
+             &foo11=is.null\
+             &foo12=not_is.null\
+             &foo13=eq.terrible\
+             &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",delicious,null)\
+             &foo15=not_in.(1,2,3)\
+             &order=foo1.desc,\"foo 2\".asc,foo5.desc\
              &limit=10\
              &offset=30";
 
-        //println!("FROM URL: {}", from_url);
         let select = parse(&from_url);
         assert_eq!(expected_sql, select.to_postgres().unwrap());
         assert_eq!(from_url, select.to_url().unwrap());
