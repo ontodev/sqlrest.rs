@@ -304,16 +304,30 @@ assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap()
 // When converting the parsed Select struct back to a URL, these values will be enclosed in
 // double-quotes in the URL.
 let from_url = "bar?c1=eq.Henry%20Kissinger\
-                &c2=in.(Jim%20McMahon,\"William Perry\",\"72\")";
+                &c2=in.(Jim%20McMahon,\"William Perry\",\"72\",Nancy,NULL)\
+                &c3=eq.Fred";
 let expected_sql = "SELECT * FROM bar WHERE c1 = 'Henry Kissinger' \
-                    AND c2 IN ('Jim McMahon', 'William Perry', '72')";
+                    AND c2 IN ('Jim McMahon', 'William Perry', '72', 'Nancy', NULL) \
+                    AND c3 = 'Fred'";
 let expected_url = "bar?c1=eq.\"Henry Kissinger\"\
-                    &c2=in.(\"Jim McMahon\",\"William Perry\",\"72\")";
+                    &c2=in.(\"Jim McMahon\",\"William Perry\",\"72\",\"Nancy\",NULL)\
+                    &c3=eq.\"Fred\"";
 let select = parse(&from_url);
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(expected_url, decode(&select.to_url().unwrap()).unwrap());
 
-// More complicated example:
+// NULL values are treated differently from literal values (i.e., they are not rendered in
+// quotes). Note also that they are not converted to uppercase in the generated SQL:
+let from_url = "bar?select=c1,c2&c1=not_eq.null";
+let expected_sql = "SELECT c1, c2 FROM bar WHERE c1 <> null";
+let select = parse(&from_url);
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
+
+// More complicated example. Note that it is not necessary to use double quotes around literal
+// strings that are not numbers and do not contain spaces, but we do so below so that the
+// assert statement will pass, because the to_url() function will render all literal strings
+// using double quotes.
 let from_url = "a%20bar?\
      select=foo1,\"foo 2\",foo%205\
      &foo1=eq.0\
@@ -322,14 +336,14 @@ let from_url = "a%20bar?\
      &foo4=gt.5\
      &foo%205=lte.30\
      &foo6=gte.60\
-     &foo7=like.alpha\
+     &foo7=like.\"alpha\"\
      &foo8=not_like.\"abby normal\"\
-     &foo9=ilike.beta\
-     &foo10=not_ilike.gamma\
-     &foo11=is.null\
-     &foo12=not_is.null\
-     &foo13=eq.terrible\
-     &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",delicious,null)\
+     &foo9=ilike.\"beta\"\
+     &foo10=not_ilike.\"gamma\"\
+     &foo11=is.NULL\
+     &foo12=not_is.NULL\
+     &foo13=eq.\"terrible\"\
+     &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
      &foo15=not_in.(1,2,3)\
      &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
      &limit=10\
