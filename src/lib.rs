@@ -630,6 +630,8 @@ impl Direction {
             Direction::Descending => "DESC",
         }
     }
+
+    /// Converts a Direction enum to a format suitable for inclusion in a URL.
     pub fn to_url(&self) -> &str {
         match self {
             Direction::Ascending => "asc",
@@ -680,15 +682,7 @@ impl Filter {
         }
 
         let rhs = rhs.into();
-        let unquoted_rhs = unquote(&rhs).unwrap_or(rhs.to_string());
-        let maybe_quoted_rhs;
-        if unquoted_rhs.contains(char::is_whitespace) {
-            maybe_quoted_rhs = format!("'{}'", unquoted_rhs);
-        } else {
-            maybe_quoted_rhs = rhs;
-        }
-
-        Ok(format!("{}{} LIKE {}", lhs.into(), negation, maybe_quoted_rhs))
+        Ok(format!("{}{} LIKE {}", lhs.into(), negation, rhs))
     }
 
     /// Given strings representing the left and right hand sides of a filter, render an SQL string
@@ -709,18 +703,10 @@ impl Filter {
         }
 
         let rhs = rhs.into();
-        let unquoted_rhs = unquote(&rhs).unwrap_or(rhs.to_string());
-        let maybe_quoted_rhs;
-        if unquoted_rhs.contains(char::is_whitespace) {
-            maybe_quoted_rhs = format!("'{}'", unquoted_rhs);
-        } else {
-            maybe_quoted_rhs = rhs;
-        }
-
         if *dbtype == DbType::Postgres {
-            Ok(format!("{}{} ILIKE {}", lhs.into(), negation, maybe_quoted_rhs))
+            Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs))
         } else {
-            Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, maybe_quoted_rhs))
+            Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs))
         }
     }
 
@@ -788,14 +774,6 @@ impl Filter {
             _ => return Err(format!("{} is neither a string nor a number", rhs)),
         };
 
-        let unquoted_value = unquote(&value).unwrap_or(value.to_string());
-        let maybe_quoted_value;
-        if unquoted_value.contains(char::is_whitespace) {
-            maybe_quoted_value = format!("'{}'", unquoted_value);
-        } else {
-            maybe_quoted_value = value.to_string();
-        }
-
         if *dbtype == DbType::Sqlite {
             Ok(format!(
                 "{} IS{} {}",
@@ -807,7 +785,7 @@ impl Filter {
                         " NOT"
                     }
                 },
-                maybe_quoted_value
+                value
             ))
         } else {
             Ok(format!(
@@ -820,7 +798,7 @@ impl Filter {
                         ""
                     }
                 },
-                maybe_quoted_value
+                value
             ))
         }
     }
@@ -895,37 +873,27 @@ impl Filter {
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::Like => match &self.rhs {
-                SerdeValue::String(s) => Self::render_like_not_like(
-                    &maybe_quote(&self.lhs, true),
-                    &maybe_quote(s, false),
-                    true,
-                ),
+                SerdeValue::String(s) => {
+                    Self::render_like_not_like(&maybe_quote(&self.lhs, true), &s, true)
+                }
                 _ => Err(not_a_string_err),
             },
             Operator::NotLike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_like_not_like(
-                    &maybe_quote(&self.lhs, true),
-                    &maybe_quote(s, false),
-                    false,
-                ),
+                SerdeValue::String(s) => {
+                    Self::render_like_not_like(&maybe_quote(&self.lhs, true), &s, false)
+                }
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_ilike_not_ilike(
-                    dbtype,
-                    &maybe_quote(&self.lhs, true),
-                    &maybe_quote(s, false),
-                    true,
-                ),
+                SerdeValue::String(s) => {
+                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs, true), &s, true)
+                }
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
-                SerdeValue::String(s) => Self::render_ilike_not_ilike(
-                    dbtype,
-                    &maybe_quote(&self.lhs, true),
-                    &maybe_quote(s, false),
-                    false,
-                ),
+                SerdeValue::String(s) => {
+                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs, true), &s, false)
+                }
                 _ => Err(not_a_string_err),
             },
             Operator::Is => {
@@ -1256,7 +1224,7 @@ impl Select {
                 //println!("Filter: {:?}", filter);
                 let rhs = match &filter.rhs {
                     SerdeValue::String(s) => {
-                        println!("SSSSS: {}", s);
+                        //println!("SSSSS: {}", s);
                         let s = unquote(&s).unwrap_or(s.clone());
                         if s.to_lowercase() == "null" {
                             s.to_string()
@@ -1276,7 +1244,7 @@ impl Select {
                         for item in v {
                             match item {
                                 SerdeValue::String(s) => {
-                                    println!("TTTTT: {}", s);
+                                    //println!("TTTTT: {}", s);
                                     let s = unquote(&s).unwrap_or(s.clone());
                                     if s.to_lowercase() == "null" {
                                         list.push(s.to_string());
