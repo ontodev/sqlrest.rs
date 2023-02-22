@@ -240,7 +240,7 @@ for pool in vec![sqlite_pool, postgresql_pool] {
 use ontodev_sqlrest::{parse, transduce};
 use urlencoding::{decode, encode};
 
-// Some basic examples:
+// Select all columns from the table "bar", with no filtering.
 let from_url = "bar";
 let expected_sql = "SELECT * FROM bar";
 let select = parse(from_url);
@@ -248,6 +248,7 @@ assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(from_url, select.to_url().unwrap());
 
+// Select the columns "foo" and "goo" from the table "bar" with no filtering.
 let from_url = "bar?select=foo,goo";
 let expected_sql = "SELECT foo, goo FROM bar";
 let select = parse(from_url);
@@ -300,9 +301,9 @@ assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap()
 // Double quotes may be used when specifying literal string values. This is mandatory if
 // a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"'. A second use
 // case is when the literal value contains spaces, though alternatively percent encoding may
-// be used instead. All literal string values will be rendered within single quotes in SQL.
-// When converting the parsed Select struct back to a URL, these values will be enclosed in
-// double-quotes in the URL.
+// be used instead. Note that all literal string values will be rendered within single quotes
+// in SQL. When converting the parsed Select struct back to a URL, these values will be enclosed
+// in double-quotes in the URL irrespective of whether they contain spaces.
 let from_url = "bar?c1=eq.Henry%20Kissinger\
                 &c2=in.(Jim%20McMahon,\"William Perry\",\"72\",Nancy,NULL)\
                 &c3=eq.Fred";
