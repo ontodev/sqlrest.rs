@@ -243,7 +243,7 @@ use urlencoding::{decode, encode};
 // Select all columns from the table "bar", with no filtering.
 let from_url = "bar";
 let expected_sql = "SELECT * FROM bar";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(from_url, select.to_url().unwrap());
@@ -251,7 +251,7 @@ assert_eq!(from_url, select.to_url().unwrap());
 // Select the columns "foo" and "goo" from the table "bar" with no filtering.
 let from_url = "bar?select=foo,goo";
 let expected_sql = "SELECT foo, goo FROM bar";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(encode(from_url), select.to_url().unwrap());
@@ -263,21 +263,21 @@ assert_eq!(encode(from_url), select.to_url().unwrap());
 // the query was parsed.
 let from_url = "a%20bar";
 let expected_sql = "SELECT * FROM \"a bar\"";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(from_url, select.to_url().unwrap());
 
 let from_url = "\"a bar\"";
 let expected_sql = "SELECT * FROM \"a bar\"";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(encode(from_url), select.to_url().unwrap());
 
 let from_url = "%22a%20bar%22";
 let expected_sql = "SELECT * FROM \"a bar\"";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
@@ -293,7 +293,7 @@ let expected_sql = "SELECT * FROM bar \
                     AND \"column_2\" = 10 \
                     AND \"column 3\" = 30 \
                     AND column_4 = 40";
-let select = parse(from_url);
+let select = parse(from_url).unwrap();
 assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
@@ -313,7 +313,7 @@ let expected_sql = "SELECT * FROM bar WHERE c1 = 'Henry Kissinger' \
 let expected_url = "bar?c1=eq.\"Henry Kissinger\"\
                     &c2=in.(\"Jim McMahon\",\"William Perry\",\"72\",\"Nancy\",NULL)\
                     &c3=eq.\"Fred\"";
-let select = parse(&from_url);
+let select = parse(&from_url).unwrap();
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(expected_url, decode(&select.to_url().unwrap()).unwrap());
 
@@ -321,7 +321,7 @@ assert_eq!(expected_url, decode(&select.to_url().unwrap()).unwrap());
 // quotes). Note also that they are not converted to uppercase in the generated SQL:
 let from_url = "bar?select=c1,c2&c1=not_eq.null";
 let expected_sql = "SELECT c1, c2 FROM bar WHERE c1 <> null";
-let select = parse(&from_url);
+let select = parse(&from_url).unwrap();
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
 
@@ -330,48 +330,48 @@ assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
 // assert statement will pass, because the to_url() function will render all literal strings
 // using double quotes.
 let from_url = "a%20bar?\
-     select=foo1,\"foo 2\",foo%205\
-     &foo1=eq.0\
-     &\"foo 2\"=not_eq.\"10\"\
-     &foo3=lt.20\
-     &foo4=gt.5\
-     &foo%205=lte.30\
-     &foo6=gte.60\
-     &foo7=like.\"alpha\"\
-     &foo8=not_like.\"abby normal\"\
-     &foo9=ilike.\"beta\"\
-     &foo10=not_ilike.\"gamma\"\
-     &foo11=is.NULL\
-     &foo12=not_is.NULL\
-     &foo13=eq.\"terrible\"\
-     &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
-     &foo15=not_in.(1,2,3)\
-     &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
-     &limit=10\
-     &offset=30";
+                select=foo1,\"foo 2\",foo%205\
+                &foo1=eq.0\
+                &\"foo 2\"=not_eq.\"10\"\
+                &foo3=lt.20\
+                &foo4=gt.5\
+                &foo%205=lte.30\
+                &foo6=gte.60\
+                &foo7=like.\"alpha\"\
+                &\"foo8\"=not_like.\"abby normal\"\
+                &foo9=ilike.\"beta\"\
+                &foo10=not_ilike.\"gamma\"\
+                &foo11=is.NULL\
+                &foo12=not_is.NULL\
+                &foo13=eq.\"terrible\"\
+                &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
+                &foo15=not_in.(1,2,3)\
+                &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
+                &limit=10\
+                &offset=30";
 
 let expected_sql = "SELECT foo1, \"foo 2\", \"foo 5\" \
-       FROM \"a bar\" \
-       WHERE foo1 = 0 \
-         AND \"foo 2\" <> '10' \
-         AND foo3 < 20 \
-         AND foo4 > 5 \
-         AND \"foo 5\" <= 30 \
-         AND foo6 >= 60 \
-         AND foo7 LIKE 'alpha' \
-         AND foo8 NOT LIKE 'abby normal' \
-         AND foo9 ILIKE 'beta' \
-         AND foo10 NOT ILIKE 'gamma' \
-         AND foo11 IS NOT DISTINCT FROM NULL \
-         AND foo12 IS DISTINCT FROM NULL \
-         AND foo13 = 'terrible' \
-         AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
-         AND foo15 NOT IN (1, 2, 3) \
-         ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
-         LIMIT 10 \
-         OFFSET 30";
+                    FROM \"a bar\" \
+                    WHERE foo1 = 0 \
+                    AND \"foo 2\" <> '10' \
+                    AND foo3 < 20 \
+                    AND foo4 > 5 \
+                    AND \"foo 5\" <= 30 \
+                    AND foo6 >= 60 \
+                    AND foo7 LIKE 'alpha' \
+                    AND \"foo8\" NOT LIKE 'abby normal' \
+                    AND foo9 ILIKE 'beta' \
+                    AND foo10 NOT ILIKE 'gamma' \
+                    AND foo11 IS NOT DISTINCT FROM NULL \
+                    AND foo12 IS DISTINCT FROM NULL \
+                    AND foo13 = 'terrible' \
+                    AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
+                    AND foo15 NOT IN (1, 2, 3) \
+                    ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+                    LIMIT 10 \
+                    OFFSET 30";
 
-let select = parse(&from_url);
+let select = parse(&from_url).unwrap();
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 ```

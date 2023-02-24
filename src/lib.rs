@@ -370,7 +370,7 @@
 //! // Select all columns from the table "bar", with no filtering.
 //! let from_url = "bar";
 //! let expected_sql = "SELECT * FROM bar";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(from_url, select.to_url().unwrap());
@@ -378,7 +378,7 @@
 //! // Select the columns "foo" and "goo" from the table "bar" with no filtering.
 //! let from_url = "bar?select=foo,goo";
 //! let expected_sql = "SELECT foo, goo FROM bar";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
@@ -390,21 +390,21 @@
 //! // the query was parsed.
 //! let from_url = "a%20bar";
 //! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(from_url, select.to_url().unwrap());
 //!
 //! let from_url = "\"a bar\"";
 //! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
 //!
 //! let from_url = "%22a%20bar%22";
 //! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
@@ -420,7 +420,7 @@
 //!                     AND \"column_2\" = 10 \
 //!                     AND \"column 3\" = 30 \
 //!                     AND column_4 = 40";
-//! let select = parse(from_url);
+//! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
@@ -440,7 +440,7 @@
 //! let expected_url = "bar?c1=eq.\"Henry Kissinger\"\
 //!                     &c2=in.(\"Jim McMahon\",\"William Perry\",\"72\",\"Nancy\",NULL)\
 //!                     &c3=eq.\"Fred\"";
-//! let select = parse(&from_url);
+//! let select = parse(&from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(expected_url, decode(&select.to_url().unwrap()).unwrap());
 //!
@@ -448,7 +448,7 @@
 //! // quotes). Note also that they are not converted to uppercase in the generated SQL:
 //! let from_url = "bar?select=c1,c2&c1=not_eq.null";
 //! let expected_sql = "SELECT c1, c2 FROM bar WHERE c1 <> null";
-//! let select = parse(&from_url);
+//! let select = parse(&from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
 //!
@@ -457,48 +457,48 @@
 //! // assert statement will pass, because the to_url() function will render all literal strings
 //! // using double quotes.
 //! let from_url = "a%20bar?\
-//!      select=foo1,\"foo 2\",foo%205\
-//!      &foo1=eq.0\
-//!      &\"foo 2\"=not_eq.\"10\"\
-//!      &foo3=lt.20\
-//!      &foo4=gt.5\
-//!      &foo%205=lte.30\
-//!      &foo6=gte.60\
-//!      &foo7=like.\"alpha\"\
-//!      &foo8=not_like.\"abby normal\"\
-//!      &foo9=ilike.\"beta\"\
-//!      &foo10=not_ilike.\"gamma\"\
-//!      &foo11=is.NULL\
-//!      &foo12=not_is.NULL\
-//!      &foo13=eq.\"terrible\"\
-//!      &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
-//!      &foo15=not_in.(1,2,3)\
-//!      &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
-//!      &limit=10\
-//!      &offset=30";
+//!                 select=foo1,\"foo 2\",foo%205\
+//!                 &foo1=eq.0\
+//!                 &\"foo 2\"=not_eq.\"10\"\
+//!                 &foo3=lt.20\
+//!                 &foo4=gt.5\
+//!                 &foo%205=lte.30\
+//!                 &foo6=gte.60\
+//!                 &foo7=like.\"alpha\"\
+//!                 &\"foo8\"=not_like.\"abby normal\"\
+//!                 &foo9=ilike.\"beta\"\
+//!                 &foo10=not_ilike.\"gamma\"\
+//!                 &foo11=is.NULL\
+//!                 &foo12=not_is.NULL\
+//!                 &foo13=eq.\"terrible\"\
+//!                 &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
+//!                 &foo15=not_in.(1,2,3)\
+//!                 &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
+//!                 &limit=10\
+//!                 &offset=30";
 //!
 //! let expected_sql = "SELECT foo1, \"foo 2\", \"foo 5\" \
-//!        FROM \"a bar\" \
-//!        WHERE foo1 = 0 \
-//!          AND \"foo 2\" <> '10' \
-//!          AND foo3 < 20 \
-//!          AND foo4 > 5 \
-//!          AND \"foo 5\" <= 30 \
-//!          AND foo6 >= 60 \
-//!          AND foo7 LIKE 'alpha' \
-//!          AND foo8 NOT LIKE 'abby normal' \
-//!          AND foo9 ILIKE 'beta' \
-//!          AND foo10 NOT ILIKE 'gamma' \
-//!          AND foo11 IS NOT DISTINCT FROM NULL \
-//!          AND foo12 IS DISTINCT FROM NULL \
-//!          AND foo13 = 'terrible' \
-//!          AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
-//!          AND foo15 NOT IN (1, 2, 3) \
-//!          ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
-//!          LIMIT 10 \
-//!          OFFSET 30";
+//!                     FROM \"a bar\" \
+//!                     WHERE foo1 = 0 \
+//!                     AND \"foo 2\" <> '10' \
+//!                     AND foo3 < 20 \
+//!                     AND foo4 > 5 \
+//!                     AND \"foo 5\" <= 30 \
+//!                     AND foo6 >= 60 \
+//!                     AND foo7 LIKE 'alpha' \
+//!                     AND \"foo8\" NOT LIKE 'abby normal' \
+//!                     AND foo9 ILIKE 'beta' \
+//!                     AND foo10 NOT ILIKE 'gamma' \
+//!                     AND foo11 IS NOT DISTINCT FROM NULL \
+//!                     AND foo12 IS DISTINCT FROM NULL \
+//!                     AND foo13 = 'terrible' \
+//!                     AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
+//!                     AND foo15 NOT IN (1, 2, 3) \
+//!                     ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+//!                     LIMIT 10 \
+//!                     OFFSET 30";
 //!
-//! let select = parse(&from_url);
+//! let select = parse(&from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //! ```
@@ -515,9 +515,6 @@ use sqlx::{
 use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
-
-pub const LIMIT_DEFAULT: usize = 20;
-pub const LIMIT_MAX: usize = 100;
 
 /// Representation of a database type. Currently only Postgres and Sqlite are supported.
 #[derive(Debug, PartialEq, Eq)]
@@ -556,12 +553,8 @@ pub enum Operator {
     NotIn,
 }
 
-/// Type of error returned in the case of a failure to parse a given string as an operator.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParseOperatorError;
-
 impl FromStr for Operator {
-    type Err = ParseOperatorError;
+    type Err = String;
 
     /// Given a string representation of an operator, return the corresponding operator. The valid
     /// string representations of the various operators are the following:
@@ -579,7 +572,7 @@ impl FromStr for Operator {
     /// * "not_is" => Operator::IsNot
     /// * "in" => Operator::In
     /// * "not_in" => Operator::NotIn
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "eq" => Ok(Operator::Equals),
             "not_eq" => Ok(Operator::NotEquals),
@@ -595,7 +588,7 @@ impl FromStr for Operator {
             "not_is" => Ok(Operator::IsNot),
             "in" => Ok(Operator::In),
             "not_in" => Ok(Operator::NotIn),
-            _ => Err(ParseOperatorError),
+            _ => Err(format!("Unable to parse '{}' as an operator.", s)),
         }
     }
 }
@@ -607,17 +600,14 @@ pub enum Direction {
     Descending,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParseDirectionError;
-
 impl FromStr for Direction {
-    type Err = ParseDirectionError;
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "asc" | "ascending" => Ok(Direction::Ascending),
             "desc" | "descending" => Ok(Direction::Descending),
-            _ => Err(ParseDirectionError),
+            _ => Err(format!("Unable to parse '{}' as a direction.", s)),
         }
     }
 }
@@ -648,13 +638,19 @@ pub struct Filter {
     pub rhs: SerdeValue,
 }
 
+/// Private helper function to surround the given string in double quotes if it is not already
+/// quoted and contains whitespace.
+fn maybe_quote(token: &str) -> String {
+    if (token.starts_with("\"") && token.ends_with("\"")) || !token.contains(char::is_whitespace) {
+        token.to_string()
+    } else {
+        format!("\"{}\"", token)
+    }
+}
+
 impl Filter {
     /// Given a left hand side, a right hand side, and an operator, create a new filter.
-    pub fn new<S: Into<String>>(
-        lhs: S,
-        operator: S,
-        rhs: SerdeValue,
-    ) -> Result<Filter, ParseOperatorError> {
+    pub fn new<S: Into<String>>(lhs: S, operator: S, rhs: SerdeValue) -> Result<Filter, String> {
         match Operator::from_str(&operator.into()) {
             Ok(operator) => Ok(Filter { lhs: lhs.into(), operator: operator, rhs: rhs }),
             Err(error) => Err(error),
@@ -812,105 +808,76 @@ impl Filter {
         let not_a_string_or_number_err =
             format!("RHS of filter: {:?} is not a string or a number.", self);
 
-        fn maybe_quote(token: &str, double: bool) -> String {
-            let quote_char;
-            if double {
-                quote_char = "\"";
-            } else {
-                quote_char = "'";
-            }
-            let unquoted_token = unquote(&token).unwrap_or(token.to_string());
-            let maybe_quoted_string;
-            if unquoted_token.contains(char::is_whitespace) {
-                maybe_quoted_string = format!("{}{}{}", quote_char, unquoted_token, quote_char);
-            } else {
-                maybe_quoted_string = token.to_string();
-            }
-            maybe_quoted_string
-        }
-
         match self.operator {
             Operator::Equals => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} = {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} = {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} = {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} = {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::NotEquals => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} <> {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} <> {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} <> {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} <> {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::LessThan => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} < {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} < {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} < {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} < {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::GreaterThan => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} > {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} > {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} > {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} > {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::LessThanEquals => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} <= {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} <= {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} <= {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} <= {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::GreaterThanEquals => match &self.rhs {
-                SerdeValue::String(s) => {
-                    Ok(format!("{} >= {}", maybe_quote(&self.lhs, true), maybe_quote(&s, false)))
-                }
-                SerdeValue::Number(n) => Ok(format!("{} >= {}", maybe_quote(&self.lhs, true), n)),
+                SerdeValue::String(s) => Ok(format!("{} >= {}", maybe_quote(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} >= {}", maybe_quote(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::Like => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_like_not_like(&maybe_quote(&self.lhs, true), &s, true)
+                    Self::render_like_not_like(&maybe_quote(&self.lhs), &s, true)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::NotLike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_like_not_like(&maybe_quote(&self.lhs, true), &s, false)
+                    Self::render_like_not_like(&maybe_quote(&self.lhs), &s, false)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs, true), &s, true)
+                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs), &s, true)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs, true), &s, false)
+                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs), &s, false)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::Is => {
-                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs, true), &self.rhs, true)
+                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs), &self.rhs, true)
             }
             Operator::IsNot => {
-                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs, true), &self.rhs, false)
+                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs), &self.rhs, false)
             }
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => {
-                    Self::render_in_not_in(&maybe_quote(&self.lhs, true), options, true)
+                    Self::render_in_not_in(&maybe_quote(&self.lhs), options, true)
                 }
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
             Operator::NotIn => match &self.rhs {
                 SerdeValue::Array(options) => {
-                    Self::render_in_not_in(&maybe_quote(&self.lhs, true), options, false)
+                    Self::render_in_not_in(&maybe_quote(&self.lhs), options, false)
                 }
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
@@ -1103,11 +1070,16 @@ impl Select {
         self.select.clear();
         // Add all of the columns returned by the query above to the select field:
         let query = sqlx_query(&sql);
-        let rows = block_on(query.fetch_all(pool)).unwrap();
-        for row in &rows {
-            let cname: &str = row.get("name");
-            self.select.push((format!(r#""{}""#, cname), None));
-        }
+        let rows = block_on(query.fetch_all(pool));
+        match rows {
+            Ok(rows) => {
+                for row in &rows {
+                    let cname: &str = row.get("name");
+                    self.select.push((format!(r#""{}""#, cname), None));
+                }
+            }
+            Err(e) => return Err(e.to_string()),
+        };
 
         Ok(self)
     }
@@ -1126,14 +1098,8 @@ impl Select {
         } else {
             let mut select_columns = vec![];
             for (column, alias) in &self.select {
-                let unquoted_column = unquote(&column).unwrap_or(column.clone());
-                let naked_column;
-                if unquoted_column.contains(char::is_whitespace) {
-                    naked_column = format!("\"{}\"", unquoted_column);
-                } else {
-                    naked_column = column.to_string();
-                }
-                select_columns.push(format!("{}{}", naked_column, {
+                let column = maybe_quote(&column);
+                select_columns.push(format!("{}{}", column, {
                     if let Some(alias) = alias {
                         format!(" AS {}", alias)
                     } else {
@@ -1144,13 +1110,7 @@ impl Select {
             select_clause = select_columns.join(", ");
         }
 
-        let unquoted_table = unquote(&self.table).unwrap_or(self.table.clone());
-        let table;
-        if unquoted_table.contains(char::is_whitespace) {
-            table = format!("\"{}\"", unquoted_table);
-        } else {
-            table = self.table.to_string();
-        }
+        let table = maybe_quote(&self.table);
         let mut sql = format!("SELECT {} FROM {}", select_clause, table);
         if !self.filter.is_empty() {
             let where_clause = match filters_to_sql(&self.filter, &dbtype) {
@@ -1174,16 +1134,7 @@ impl Select {
             let order_strings = self
                 .order_by
                 .iter()
-                .map(|(col, dir)| {
-                    let unquoted_col = unquote(&col).unwrap_or(col.to_string());
-                    let maybe_quoted_col;
-                    if unquoted_col.contains(char::is_whitespace) {
-                        maybe_quoted_col = format!("\"{}\"", unquoted_col);
-                    } else {
-                        maybe_quoted_col = col.to_string();
-                    }
-                    format!("{} {}", maybe_quoted_col, dir.to_sql())
-                })
+                .map(|(col, dir)| format!("{} {}", maybe_quote(&col), dir.to_sql()))
                 .collect::<Vec<String>>();
             sql.push_str(&format!("{}", order_strings.join(", ")));
         }
@@ -1219,54 +1170,48 @@ impl Select {
         if self.select.len() > 0 {
             params.push(format!("select={}", parts.join(",")));
         }
+
+        fn quote_if_not_null(token: &str) -> String {
+            if token.to_lowercase() == "null" {
+                token.to_string()
+            } else {
+                if let Ok(s) = unquote(&token) {
+                    format!("\"{}\"", s)
+                } else {
+                    format!("\"{}\"", token)
+                }
+            }
+        }
+
         if self.filter.len() > 0 {
             for filter in &self.filter {
-                //println!("Filter: {:?}", filter);
                 let rhs = match &filter.rhs {
-                    SerdeValue::String(s) => {
-                        //println!("SSSSS: {}", s);
-                        let s = unquote(&s).unwrap_or(s.clone());
-                        if s.to_lowercase() == "null" {
-                            s.to_string()
-                        } else {
-                            format!("\"{}\"", s)
-                        }
-
-                        //if s.contains(char::is_whitespace) || s.chars().all(char::is_numeric) {
-                        //    format!("\"{}\"", s)
-                        //} else {
-                        //    s.to_string()
-                        //}
-                    }
+                    SerdeValue::String(s) => quote_if_not_null(&s),
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
                         let mut list = vec![];
                         for item in v {
                             match item {
                                 SerdeValue::String(s) => {
-                                    //println!("TTTTT: {}", s);
-                                    let s = unquote(&s).unwrap_or(s.clone());
-                                    if s.to_lowercase() == "null" {
-                                        list.push(s.to_string());
-                                    } else {
-                                        list.push(format!("\"{}\"", s));
-                                    }
-
-                                    //if s.contains(char::is_whitespace)
-                                    //    || s.chars().all(char::is_numeric)
-                                    //{
-                                    //    list.push(format!("\"{}\"", s));
-                                    //} else {
-                                    //    list.push(s.to_string());
-                                    //}
+                                    list.push(quote_if_not_null(&s));
                                 }
                                 SerdeValue::Number(n) => list.push(n.to_string()),
-                                _ => panic!("Arrrggghhhhh!!!!"),
+                                _ => {
+                                    return Err(format!(
+                                        "Not all list items in {:?} are strings or numbers.",
+                                        v
+                                    ))
+                                }
                             };
                         }
                         format!("({})", list.join(","))
                     }
-                    _ => panic!("RHS of Filter: {:?} is not a string, number, or list", filter),
+                    _ => {
+                        return Err(format!(
+                            "RHS of Filter: {:?} is not a string, number, or list",
+                            filter
+                        ))
+                    }
                 };
 
                 let x = match filter.operator {
@@ -1294,17 +1239,11 @@ impl Select {
             params.push(format!("order={}", parts.join(",")));
         }
         if let Some(limit) = self.limit {
-            if limit > 0 && limit != LIMIT_DEFAULT {
-                params.push(format!("limit={}", limit));
-            }
+            params.push(format!("limit={}", limit));
         }
         if let Some(offset) = self.offset {
-            if offset > 0 {
-                params.push(format!("offset={}", offset));
-            }
+            params.push(format!("offset={}", offset));
         }
-
-        //println!("TABLE: {}", self.table);
 
         if params.len() > 0 {
             Ok(encode(&format!("{}?{}", self.table, params.join("&"))).to_string())
@@ -1423,214 +1362,421 @@ impl Select {
     }
 }
 
-/// TODO: Add a docstring here.
+/// Given a tree-sitter Node and a raw string, extract the token from the string that is indicated
+/// by the node and return it.
 pub fn get_from_raw(n: &Node, raw: &str) -> String {
-    println!("In get_from_raw() ...");
-    //println!("RAW: {}", raw);
-    //println!("NODE KIND: {}", n.kind());
     let start = n.start_position().column;
-    //println!("START: {:?}", start);
     let end = n.end_position().column;
-    //println!("END: {:?}", end);
     let extract = &raw[start..end];
-    //println!("EXTRACT: {}", extract);
     String::from(extract)
 }
 
-/// TODO: Add a docstring here.
-pub fn parse(input: &str) -> Select {
-    println!("In parse() ...");
+/// Given an input URL, parse it as a Select struct and return it.
+pub fn parse(url: &str) -> Result<Select, String> {
     let mut parser: Parser = Parser::new();
-    let input = input.to_string();
-
+    let url = url.to_string();
     parser.set_language(tree_sitter_sqlrest::language()).expect("Error loading sqlrest grammar");
-
-    let tree = parser.parse(&input, None).unwrap();
-
-    let mut query = Select::new("");
-    transduce(&tree.root_node(), &input, &mut query);
-    query
+    let tree = parser.parse(&url, None);
+    match tree {
+        Some(tree) => {
+            let mut query_result: Result<Select, String> = Ok(Select::new(""));
+            transduce(&tree.root_node(), &url, &mut query_result);
+            query_result
+        }
+        None => Err(format!("Unable to parse tree from URL: {}", url)),
+    }
 }
 
-/// TODO: Add a docstring here.
-pub fn transduce(n: &Node, raw: &str, query: &mut Select) {
-    println!("In transduce() for {} ...", n.kind());
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the select statement indicated by the node and raw string into the Select struct.
+pub fn transduce(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
     match n.kind() {
-        "query" => transduce_children(n, raw, query),
-        "select" => transduce_select(n, raw, query),
-        "table" => transduce_table(n, raw, query),
-        "expression" => transduce_children(n, raw, query),
-        "part" => transduce_children(n, raw, query),
-        "filter" => transduce_children(n, raw, query),
-        "simple_filter" => transduce_filter(n, raw, query),
-        "special_filter" => transduce_children(n, raw, query),
-        "in" => transduce_in(n, raw, query, false),
-        "not_in" => transduce_in(n, raw, query, true),
-        "order" => transduce_order(n, raw, query),
-        "limit" => transduce_limit(n, raw, query),
-        "offset" => transduce_offset(n, raw, query),
-        "STRING" => panic!("Encountered STRING in top level translation"),
+        "query" => transduce_children(n, raw, query_result),
+        "select" => transduce_select(n, raw, query_result),
+        "table" => transduce_table(n, raw, query_result),
+        "expression" => transduce_children(n, raw, query_result),
+        "part" => transduce_children(n, raw, query_result),
+        "filter" => transduce_children(n, raw, query_result),
+        "simple_filter" => transduce_filter(n, raw, query_result),
+        "special_filter" => transduce_children(n, raw, query_result),
+        "in" => transduce_in(n, raw, query_result, false),
+        "not_in" => transduce_in(n, raw, query_result, true),
+        "order" => transduce_order(n, raw, query_result),
+        "limit" => transduce_limit(n, raw, query_result),
+        "offset" => transduce_offset(n, raw, query_result),
+        "STRING" => *query_result = Err("Encountered STRING in top level translation".to_string()),
         _ => {
-            panic!("Error parsing node of kind '{}': {:?} {} {:?}", n.kind(), n, raw, query);
+            *query_result = Err(format!(
+                "Error parsing node of kind '{}': {:?} {} {:?}",
+                n.kind(),
+                n,
+                raw,
+                query_result
+            ))
         }
     }
 }
 
-// TODO: REMOVE THE UNWRAPS FROM THE TRANSDUCE FUNCTIONS BELOW AND RETURN RESULT OBJECTS INSTEAD.
-
-/// TODO: Add a docstring here.
-pub fn transduce_children(n: &Node, raw: &str, q: &mut Select) {
-    println!("In transduce_children() ...");
-    let child_count = n.named_child_count();
-    for i in 0..child_count {
-        transduce(&n.named_child(i).unwrap(), raw, q);
-    }
-}
-
-/// TODO: Add a docstring here.
-pub fn transduce_table(n: &Node, raw: &str, query: &mut Select) {
-    println!("In transduce_table() ...");
-    let table = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
-    query.table = table;
-}
-
-/// TODO: Add a docstring here.
-pub fn transduce_filter(n: &Node, raw: &str, query: &mut Select) {
-    println!("In transduce_filter() ...");
-    let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
-    let operator_string = get_from_raw(&n.named_child(1).unwrap(), raw);
-    let value_node = n.named_child(2).unwrap();
-    let value = decode(&get_from_raw(&value_node, raw)).unwrap().into_owned();
-    let value: SerdeValue = {
-        if value_node.kind() != "value" {
-            panic!("Arghh!!! Unexpected Node kind: {}!!!", value_node.kind());
-        } else {
-            match value.parse::<i64>() {
-                Ok(v) => json!(v),
-                Err(_) => match value.parse::<f64>() {
-                    Ok(v) => json!(v),
-                    Err(_) => {
-                        if value.to_lowercase() == "null" {
-                            json!(value)
-                        } else {
-                            let unquoted_value = unquote(&value).unwrap_or(value.to_string());
-                            json!(format!("'{}'", unquoted_value))
-                        }
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// iterate over the node's child nodes and transduce them into the Select struct.
+pub fn transduce_children(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(_) => {
+            let child_count = n.named_child_count();
+            for i in 0..child_count {
+                match n.named_child(i) {
+                    Some(named_child) => transduce(&named_child, raw, query_result),
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract named child #{} from Node {:?}", i, n));
+                        return;
                     }
-                },
+                };
             }
         }
-    };
-
-    let filter = Filter::new(column, operator_string, value).unwrap();
-    query.filter.push(filter);
-}
-
-/// TODO: Add a docstring here.
-pub fn transduce_list(n: &Node, raw: &str) -> Vec<String> {
-    println!("In transduce_in() ...");
-    let quoted_strings = match n.kind() {
-        "list" => false,
-        "list_of_strings" => true,
-        _ => panic!("Not a valid list"),
-    };
-
-    let mut vec = Vec::new();
-
-    let child_count = n.named_child_count();
-    for i in 0..child_count {
-        let value = decode(&get_from_raw(&n.named_child(i).unwrap(), raw)).unwrap().into_owned();
-        if quoted_strings {
-            let quoted_string = format!("{}", value);
-            vec.push(quoted_string);
-        } else {
-            vec.push(value);
-        }
     }
-    vec
 }
 
-/// TODO: Add a docstring here.
-pub fn transduce_in(n: &Node, raw: &str, query: &mut Select, negate: bool) {
-    println!("In transduce_in() ...");
-    let column = decode(&get_from_raw(&n.named_child(0).unwrap(), raw)).unwrap().into_owned();
-    let values = transduce_list(&n.named_child(1).unwrap(), raw);
-    let mut choices = vec![];
-    for value in values {
-        match value.parse::<i64>() {
-            Ok(v) => choices.push(json!(v)),
-            Err(_) => match value.parse::<f64>() {
-                Ok(v) => choices.push(json!(v)),
-                Err(_) => {
-                    if value.to_lowercase() == "null" {
-                        choices.push(json!(value));
-                    } else {
-                        let unquoted_value = unquote(&value).unwrap_or(value.to_string());
-                        choices.push(json!(format!("'{}'", unquoted_value)));
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the table name indicated by the node into the Select struct.
+pub fn transduce_table(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => match n.named_child(0) {
+            Some(child) => match decode(&get_from_raw(&child, raw)) {
+                Ok(table) => {
+                    query.table(table.to_string());
+                }
+                Err(e) => *query_result = Err(e.to_string()),
+            },
+            _ => {
+                *query_result = Err(format!("Unable to extract 0th named child from Node: {:?}", n))
+            }
+        },
+    }
+}
+
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the filter indicated by the node into the Select struct.
+pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let column = {
+                match n.named_child(0) {
+                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                        Ok(column) => column.to_string(),
+                        Err(e) => {
+                            *query_result = Err(e.to_string());
+                            return;
+                        }
+                    },
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                        return;
                     }
                 }
+            };
+            let operator_string = {
+                match n.named_child(1) {
+                    Some(child) => get_from_raw(&child, raw),
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract 1st named child from Node {:?}", n));
+                        return;
+                    }
+                }
+            };
+
+            let value_node = {
+                match n.named_child(2) {
+                    Some(value_node) => value_node,
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract 2nd named child from Node {:?}", n));
+                        return;
+                    }
+                }
+            };
+            let value = {
+                if value_node.kind() != "value" {
+                    *query_result = Err(format!("Unexpected Node kind: {}", value_node.kind()));
+                    return;
+                } else {
+                    let value = get_from_raw(&value_node, raw);
+                    match decode(&value) {
+                        Err(e) => {
+                            *query_result = Err(e.to_string());
+                            return;
+                        }
+                        Ok(value) => match value.parse::<i64>() {
+                            Ok(v) => json!(v),
+                            Err(_) => match value.parse::<f64>() {
+                                Ok(v) => json!(v),
+                                Err(_) => {
+                                    if value.to_lowercase() == "null" {
+                                        json!(value)
+                                    } else {
+                                        let unquoted_value =
+                                            unquote(&value).unwrap_or(value.to_string());
+                                        json!(format!("'{}'", unquoted_value))
+                                    }
+                                }
+                            },
+                        },
+                    }
+                }
+            };
+            match Filter::new(column, operator_string, value) {
+                Ok(filter) => query.add_filter(filter),
+                Err(e) => {
+                    *query_result = Err(e.to_string());
+                    return;
+                }
+            };
+        }
+    }
+}
+
+/// Given a tree-sitter node and a raw string, transduce the list indicated by the node into a
+/// vector of strings.
+pub fn transduce_list(n: &Node, raw: &str) -> Result<Vec<String>, String> {
+    if n.kind() != "list" {
+        return Err(format!("Node: '{:?}' of kind '{}' is not a list", n, n.kind()));
+    }
+    let mut vec = Vec::new();
+    let child_count = n.named_child_count();
+    for i in 0..child_count {
+        match n.named_child(i) {
+            None => return Err(format!("Unable to extract named child #{} from Node {:?}", i, n)),
+            Some(child) => match decode(&get_from_raw(&child, raw)) {
+                Err(e) => return Err(e.to_string()),
+                Ok(value) => vec.push(value.into_owned()),
             },
         }
     }
-
-    let operator_str = if negate { String::from("not_in") } else { String::from("in") };
-    let filter = Filter::new(column, operator_str, SerdeValue::Array(choices)).unwrap();
-    query.filter.push(filter);
+    Ok(vec)
 }
 
-/// TODO: Add a docstring here.
-pub fn transduce_select(n: &Node, raw: &str, query: &mut Select) {
-    println!("In transduce_select() ...");
-    let child_count = n.named_child_count();
-    for position in 0..child_count {
-        let column =
-            decode(&get_from_raw(&n.named_child(position).unwrap(), raw)).unwrap().into_owned();
-        query.select.push((column, None)); // TODO: Support aliases.
-    }
-}
-
-pub fn transduce_order(n: &Node, raw: &str, query: &mut Select) {
-    let child_count = n.named_child_count();
-    let mut position = 0;
-
-    while position < child_count {
-        let column =
-            decode(&get_from_raw(&n.named_child(position).unwrap(), raw)).unwrap().into_owned();
-        position = position + 1;
-        if position < child_count && n.named_child(position).unwrap().kind().eq("ordering") {
-            let ordering_string = get_from_raw(&n.named_child(position).unwrap(), raw);
-            let ordering = Direction::from_str(&ordering_string);
-            match ordering {
-                Ok(o) => {
-                    position = position + 1;
-                    let order = (column, o);
-                    query.add_order_by(order);
-                }
-                Err(_) => {
-                    //tracing::warn!("Unhandled order param '{}'", ordering_string);
-                    panic!("Unhandled order param '{}'", ordering_string);
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the list of strings indicated by the node into an "IN" clause (or a "NOT IN" clause if
+/// `negate` is set to true) for the Select struct.
+pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, String>, negate: bool) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let column = {
+                match n.named_child(0) {
+                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                        Ok(column) => column.to_string(),
+                        Err(e) => {
+                            *query_result = Err(e.to_string());
+                            return;
+                        }
+                    },
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                        return;
+                    }
                 }
             };
-        } else {
-            let ordering = Direction::Ascending; //default ordering is ASC
-            let order = (column, ordering);
-            query.add_order_by(order);
+            let values = {
+                match n.named_child(1) {
+                    Some(child) => match transduce_list(&child, raw) {
+                        Ok(values) => values,
+                        Err(e) => {
+                            *query_result = Err(e.to_string());
+                            return;
+                        }
+                    },
+                    _ => {
+                        *query_result =
+                            Err(format!("Unable to extract 1st named child from Node: {:?}", n));
+                        return;
+                    }
+                }
+            };
+            let mut choices = vec![];
+            for value in values {
+                match value.parse::<i64>() {
+                    Ok(v) => choices.push(json!(v)),
+                    Err(_) => match value.parse::<f64>() {
+                        Ok(v) => choices.push(json!(v)),
+                        Err(_) => {
+                            if value.to_lowercase() == "null" {
+                                choices.push(json!(value));
+                            } else {
+                                let unquoted_value = unquote(&value).unwrap_or(value.to_string());
+                                choices.push(json!(format!("'{}'", unquoted_value)));
+                            }
+                        }
+                    },
+                }
+            }
+            let operator_str = if negate { String::from("not_in") } else { String::from("in") };
+            match Filter::new(column, operator_str, SerdeValue::Array(choices)) {
+                Ok(filter) => query.add_filter(filter),
+                Err(e) => {
+                    *query_result = Err(e.to_string());
+                    return;
+                }
+            };
         }
     }
 }
 
-/// TODO: Add a docstring here:
-pub fn transduce_offset(n: &Node, raw: &str, query: &mut Select) {
-    let offset_string = get_from_raw(&n.named_child(0).unwrap(), raw);
-    let offset: usize = offset_string.parse().unwrap();
-    query.offset(offset);
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the list of strings indicated by the node into a "SELECT" clause for the Select
+/// struct.
+pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    // TODO: Support aliases.
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let child_count = n.named_child_count();
+            for i in 0..child_count {
+                let column = {
+                    match n.named_child(i) {
+                        Some(child) => match decode(&get_from_raw(&child, raw)) {
+                            Ok(column) => column.to_string(),
+                            Err(e) => {
+                                *query_result = Err(e.to_string());
+                                return;
+                            }
+                        },
+                        _ => {
+                            *query_result = Err(format!(
+                                "Unable to extract named child #{} from Node: {:?}",
+                                i, n
+                            ));
+                            return;
+                        }
+                    }
+                };
+                query.add_select(column);
+            }
+        }
+    }
 }
 
-/// TODO: Add a docstring here:
-pub fn transduce_limit(n: &Node, raw: &str, query: &mut Select) {
-    let limit_string = get_from_raw(&n.named_child(0).unwrap(), raw);
-    let limit: usize = limit_string.parse().unwrap();
-    query.limit(limit);
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce the list of strings indicated by the node into an "ORDER BY" clause for the Select
+/// struct.
+pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let child_count = n.named_child_count();
+            let mut position = 0;
+            while position < child_count {
+                let named_child = n.named_child(position);
+                if let None = named_child {
+                    *query_result = Err(format!(
+                        "Unable to extract named child #{} from Node: {:?}",
+                        position, n
+                    ));
+                    return;
+                }
+                let named_child = named_child.unwrap();
+
+                let column = get_from_raw(&named_child, raw);
+                let column = decode(&column);
+                if let Err(e) = column {
+                    *query_result = Err(e.to_string());
+                    return;
+                }
+                let column = column.unwrap();
+
+                position = position + 1;
+                let named_child = n.named_child(position);
+                if let None = named_child {
+                    *query_result = Err(format!(
+                        "Unable to extract named child #{} from Node: {:?}",
+                        position, n
+                    ));
+                    return;
+                }
+                let named_child = named_child.unwrap();
+
+                if position < child_count && named_child.kind().eq("ordering") {
+                    let ordering_string = get_from_raw(&named_child, raw);
+                    let ordering = Direction::from_str(&ordering_string);
+                    match ordering {
+                        Ok(o) => {
+                            position = position + 1;
+                            let order = (column, o);
+                            query.add_order_by(order);
+                        }
+                        Err(e) => {
+                            *query_result = Err(e.to_string());
+                            return;
+                        }
+                    };
+                } else {
+                    let ordering = Direction::Ascending; //default ordering is ASC
+                    let order = (column, ordering);
+                    query.add_order_by(order);
+                }
+            }
+        }
+    }
+}
+
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce integer indicated by the node into an "OFFSET" clause for the Select
+/// struct.
+pub fn transduce_offset(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let offset_str = match n.named_child(0) {
+                None => {
+                    *query_result =
+                        Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                    return;
+                }
+                Some(named_child) => get_from_raw(&named_child, raw),
+            };
+            let offset: usize = match offset_str.parse() {
+                Err(_) => {
+                    *query_result = Err(format!("Unable to parse '{}' as an offset.", offset_str));
+                    return;
+                }
+                Ok(offset) => offset,
+            };
+            query.offset(offset);
+        }
+    }
+}
+
+/// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
+/// transduce integer indicated by the node into an "LIMIT" clause for the Select
+/// struct.
+pub fn transduce_limit(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
+    match query_result {
+        Err(_) => return,
+        Ok(query) => {
+            let limit_str = match n.named_child(0) {
+                None => {
+                    *query_result =
+                        Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                    return;
+                }
+                Some(named_child) => get_from_raw(&named_child, raw),
+            };
+            let limit: usize = match limit_str.parse() {
+                Err(_) => {
+                    *query_result = Err(format!("Unable to parse '{}' as an limit.", limit_str));
+                    return;
+                }
+                Ok(limit) => limit,
+            };
+            query.limit(limit);
+        }
+    }
 }
 
 /// Given a database type and two Select structs, generate an SQL statement such that the
@@ -2187,4 +2333,10 @@ mod tests {
             _ => panic!("'{}' does not match 'foovalue'", fooval),
         };
     }
+
+    //#[test]
+    //#[serial]
+    //fn test_query() {
+    //    assert_eq!(1, 2);
+    //}
 }
