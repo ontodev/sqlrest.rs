@@ -363,144 +363,7 @@
 //! }
 //! ```
 //! ## Parsing Selects from URLs and vice versa.
-//! ```rust
-//! use ontodev_sqlrest::{parse, transduce};
-//! use urlencoding::{decode, encode};
-//!
-//! // Select all columns from the table "bar", with no filtering.
-//! let from_url = "bar";
-//! let expected_sql = "SELECT * FROM bar";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(from_url, select.to_url().unwrap());
-//!
-//! // Select the columns "foo" and "goo" from the table "bar" with no filtering.
-//! let from_url = "bar?select=foo,goo";
-//! let expected_sql = "SELECT foo, goo FROM bar";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(encode(from_url), select.to_url().unwrap());
-//!
-//! // Table names with spaces can be specified in a URL using percent encoding, or explicitly
-//! // using double quotes. In either case calling to_sql() will render the table name in double
-//! // quotes, but double quotes will not be rendered upon calling to_url() unless they were
-//! // included to begin with (either explicitly or using percent encoding) in the url from which
-//! // the query was parsed.
-//! let from_url = "a%20bar";
-//! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(from_url, select.to_url().unwrap());
-//!
-//! let from_url = "\"a bar\"";
-//! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(encode(from_url), select.to_url().unwrap());
-//!
-//! let from_url = "%22a%20bar%22";
-//! let expected_sql = "SELECT * FROM \"a bar\"";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
-//!
-//! // Column names are handled similarly to table names:
-//! let from_url = "bar?\
-//!                 \"column 1\"=eq.5\
-//!                 &\"column_2\"=eq.10\
-//!                 &%22column%203%22=eq.30\
-//!                 &column_4=eq.40";
-//! let expected_sql = "SELECT * FROM bar \
-//!                     WHERE \"column 1\" = 5 \
-//!                     AND \"column_2\" = 10 \
-//!                     AND \"column 3\" = 30 \
-//!                     AND column_4 = 40";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
-//!
-//! // Double quotes may be used when specifying literal string values. This is mandatory if
-//! // a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"'. A second use
-//! // case is when the literal value contains spaces, though alternatively percent encoding may
-//! // be used instead. Note that all literal string values will be rendered within single quotes
-//! // in SQL. When converting the parsed Select struct back to a URL, these values will be enclosed
-//! // in double-quotes in the URL irrespective of whether they contain spaces.
-//! let from_url = "bar?c1=eq.Henry%20Kissinger\
-//!                 &c2=in.(Jim%20McMahon,\"William Perry\",\"72\",Nancy,NULL)\
-//!                 &c3=eq.Fred";
-//! let expected_sql = "SELECT * FROM bar WHERE c1 = 'Henry Kissinger' \
-//!                     AND c2 IN ('Jim McMahon', 'William Perry', '72', 'Nancy', NULL) \
-//!                     AND c3 = 'Fred'";
-//! let expected_url = "bar?c1=eq.\"Henry Kissinger\"\
-//!                     &c2=in.(\"Jim McMahon\",\"William Perry\",\"72\",\"Nancy\",NULL)\
-//!                     &c3=eq.\"Fred\"";
-//! let select = parse(&from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(expected_url, decode(&select.to_url().unwrap()).unwrap());
-//!
-//! // NULL values are treated differently from literal values (i.e., they are not rendered in
-//! // quotes). Note also that they are not converted to uppercase in the generated SQL:
-//! let from_url = "bar?select=c1,c2&c1=not_eq.null";
-//! let expected_sql = "SELECT c1, c2 FROM bar WHERE c1 <> null";
-//! let select = parse(&from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
-//!
-//! // More complicated example. Note that it is not necessary to use double quotes around literal
-//! // strings that are not numbers and do not contain spaces, but we do so below so that the
-//! // assert statement will pass, because the to_url() function will render all literal strings
-//! // using double quotes.
-//! let from_url = "a%20bar?\
-//!                 select=foo1,\"foo 2\",foo%205\
-//!                 &foo1=eq.0\
-//!                 &\"foo 2\"=not_eq.\"10\"\
-//!                 &foo3=lt.20\
-//!                 &foo4=gt.5\
-//!                 &foo%205=lte.30\
-//!                 &foo6=gte.60\
-//!                 &foo7=like.\"alpha\"\
-//!                 &\"foo8\"=not_like.\"abby normal\"\
-//!                 &foo9=ilike.\"beta\"\
-//!                 &foo10=not_ilike.\"gamma\"\
-//!                 &foo11=is.NULL\
-//!                 &foo12=not_is.NULL\
-//!                 &foo13=eq.\"terrible\"\
-//!                 &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
-//!                 &foo15=not_in.(1,2,3)\
-//!                 &order=foo1.desc,\"foo 2\".asc,foo%205.desc\
-//!                 &limit=10\
-//!                 &offset=30";
-//!
-//! let expected_sql = "SELECT foo1, \"foo 2\", \"foo 5\" \
-//!                     FROM \"a bar\" \
-//!                     WHERE foo1 = 0 \
-//!                     AND \"foo 2\" <> '10' \
-//!                     AND foo3 < 20 \
-//!                     AND foo4 > 5 \
-//!                     AND \"foo 5\" <= 30 \
-//!                     AND foo6 >= 60 \
-//!                     AND foo7 LIKE 'alpha' \
-//!                     AND \"foo8\" NOT LIKE 'abby normal' \
-//!                     AND foo9 ILIKE 'beta' \
-//!                     AND foo10 NOT ILIKE 'gamma' \
-//!                     AND foo11 IS NOT DISTINCT FROM NULL \
-//!                     AND foo12 IS DISTINCT FROM NULL \
-//!                     AND foo13 = 'terrible' \
-//!                     AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
-//!                     AND foo15 NOT IN (1, 2, 3) \
-//!                     ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
-//!                     LIMIT 10 \
-//!                     OFFSET 30";
-//!
-//! let select = parse(&from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+//! ```rust,ignore
 //! ```
 
 use enquote::unquote;
@@ -1160,40 +1023,36 @@ impl Select {
         }
 
         let mut params: Vec<String> = vec![];
-        let parts: Vec<String> = self
-            .select
-            .iter()
-            // TODO: Handle aliases. See https://postgrest.org/en/stable/api.html#renaming-columns
-            .map(|(column, _alias)| column.clone())
-            .collect();
-
         if self.select.len() > 0 {
+            let parts: Vec<String> = self
+                .select
+                .iter()
+                // TODO: Handle aliases. See https://postgrest.org/en/stable/api.html#renaming-columns
+                .map(|(column, _alias)| unquote(column).unwrap_or(column.to_string()))
+                .collect();
             params.push(format!("select={}", parts.join(",")));
         }
 
-        fn quote_if_not_null(token: &str) -> String {
-            if token.to_lowercase() == "null" {
-                token.to_string()
+        fn quote_if_numeric(token: &str) -> String {
+            let token = unquote(&token).unwrap_or(token.to_string());
+            if token.chars().all(char::is_numeric) {
+                format!("\"{}\"", token)
             } else {
-                if let Ok(s) = unquote(&token) {
-                    format!("\"{}\"", s)
-                } else {
-                    format!("\"{}\"", token)
-                }
+                token.to_string()
             }
         }
 
         if self.filter.len() > 0 {
             for filter in &self.filter {
                 let rhs = match &filter.rhs {
-                    SerdeValue::String(s) => quote_if_not_null(&s),
+                    SerdeValue::String(s) => quote_if_numeric(&s),
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
                         let mut list = vec![];
                         for item in v {
                             match item {
                                 SerdeValue::String(s) => {
-                                    list.push(quote_if_not_null(&s));
+                                    list.push(quote_if_numeric(&s));
                                 }
                                 SerdeValue::Number(n) => list.push(n.to_string()),
                                 _ => {
@@ -1214,28 +1073,32 @@ impl Select {
                     }
                 };
 
+                let lhs = unquote(&filter.lhs).unwrap_or(filter.lhs.to_string());
                 let x = match filter.operator {
-                    Operator::Equals => format!(r#"{}=eq.{}"#, filter.lhs, rhs),
-                    Operator::NotEquals => format!(r#"{}=not_eq.{}"#, filter.lhs, rhs),
-                    Operator::LessThan => format!(r#"{}=lt.{}"#, filter.lhs, rhs),
-                    Operator::GreaterThan => format!(r#"{}=gt.{}"#, filter.lhs, rhs),
-                    Operator::LessThanEquals => format!(r#"{}=lte.{}"#, filter.lhs, rhs),
-                    Operator::GreaterThanEquals => format!(r#"{}=gte.{}"#, filter.lhs, rhs),
-                    Operator::Like => format!(r#"{}=like.{}"#, filter.lhs, rhs),
-                    Operator::NotLike => format!(r#"{}=not_like.{}"#, filter.lhs, rhs),
-                    Operator::ILike => format!(r#"{}=ilike.{}"#, filter.lhs, rhs),
-                    Operator::NotILike => format!(r#"{}=not_ilike.{}"#, filter.lhs, rhs),
-                    Operator::Is => format!(r#"{}=is.{}"#, filter.lhs, rhs),
-                    Operator::IsNot => format!(r#"{}=not_is.{}"#, filter.lhs, rhs),
-                    Operator::In => format!(r#"{}=in.{}"#, filter.lhs, rhs),
-                    Operator::NotIn => format!(r#"{}=not_in.{}"#, filter.lhs, rhs),
+                    Operator::Equals => format!(r#"{}=eq.{}"#, lhs, rhs),
+                    Operator::NotEquals => format!(r#"{}=not_eq.{}"#, lhs, rhs),
+                    Operator::LessThan => format!(r#"{}=lt.{}"#, lhs, rhs),
+                    Operator::GreaterThan => format!(r#"{}=gt.{}"#, lhs, rhs),
+                    Operator::LessThanEquals => format!(r#"{}=lte.{}"#, lhs, rhs),
+                    Operator::GreaterThanEquals => format!(r#"{}=gte.{}"#, lhs, rhs),
+                    Operator::Like => format!(r#"{}=like.{}"#, lhs, rhs),
+                    Operator::NotLike => format!(r#"{}=not_like.{}"#, lhs, rhs),
+                    Operator::ILike => format!(r#"{}=ilike.{}"#, lhs, rhs),
+                    Operator::NotILike => format!(r#"{}=not_ilike.{}"#, lhs, rhs),
+                    Operator::Is => format!(r#"{}=is.{}"#, lhs, rhs),
+                    Operator::IsNot => format!(r#"{}=not_is.{}"#, lhs, rhs),
+                    Operator::In => format!(r#"{}=in.{}"#, lhs, rhs),
+                    Operator::NotIn => format!(r#"{}=not_in.{}"#, lhs, rhs),
                 };
                 params.push(x);
             }
         }
         if self.order_by.len() > 0 {
-            let parts: Vec<String> =
-                self.order_by.iter().map(|(c, d)| format!(r"{}.{}", c, d.to_url())).collect();
+            let parts: Vec<String> = self
+                .order_by
+                .iter()
+                .map(|(c, d)| format!(r"{}.{}", unquote(c).unwrap_or(c.to_string()), d.to_url()))
+                .collect();
             params.push(format!("order={}", parts.join(",")));
         }
         if let Some(limit) = self.limit {
@@ -1245,10 +1108,11 @@ impl Select {
             params.push(format!("offset={}", offset));
         }
 
+        let table = unquote(&self.table).unwrap_or(self.table.to_string());
         if params.len() > 0 {
-            Ok(encode(&format!("{}?{}", self.table, params.join("&"))).to_string())
+            Ok(encode(&format!("{}?{}", table, params.join("&"))).to_string())
         } else {
-            Ok(encode(&self.table.clone()).to_string())
+            Ok(encode(&table.clone()).to_string())
         }
     }
 
@@ -1373,8 +1237,15 @@ pub fn get_from_raw(n: &Node, raw: &str) -> String {
 
 /// Given an input URL, parse it as a Select struct and return it.
 pub fn parse(url: &str) -> Result<Select, String> {
-    let mut parser: Parser = Parser::new();
+    let url = {
+        match decode(url) {
+            Ok(url) => url,
+            Err(e) => return Err(e.to_string()),
+        }
+    };
     let url = url.to_string();
+
+    let mut parser: Parser = Parser::new();
     parser.set_language(tree_sitter_sqlrest::language()).expect("Error loading sqlrest grammar");
     let tree = parser.parse(&url, None);
     match tree {
@@ -1446,7 +1317,7 @@ pub fn transduce_table(n: &Node, raw: &str, query_result: &mut Result<Select, St
         Ok(query) => match n.named_child(0) {
             Some(child) => match decode(&get_from_raw(&child, raw)) {
                 Ok(table) => {
-                    query.table(table.to_string());
+                    query.table(format!("\"{}\"", table));
                 }
                 Err(e) => *query_result = Err(e.to_string()),
             },
@@ -1466,7 +1337,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
             let column = {
                 match n.named_child(0) {
                     Some(child) => match decode(&get_from_raw(&child, raw)) {
-                        Ok(column) => column.to_string(),
+                        Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
                             return;
@@ -1570,7 +1441,7 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
             let column = {
                 match n.named_child(0) {
                     Some(child) => match decode(&get_from_raw(&child, raw)) {
-                        Ok(column) => column.to_string(),
+                        Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
                             return;
@@ -1656,7 +1527,7 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
                         }
                     }
                 };
-                query.add_select(column);
+                query.add_select(format!("\"{}\"", column));
             }
         }
     }
@@ -1707,7 +1578,7 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     match ordering {
                         Ok(o) => {
                             position = position + 1;
-                            let order = (column, o);
+                            let order = (format!("\"{}\"", column), o);
                             query.add_order_by(order);
                         }
                         Err(e) => {
@@ -1717,7 +1588,7 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     };
                 } else {
                     let ordering = Direction::Ascending; //default ordering is ASC
-                    let order = (column, ordering);
+                    let order = (format!("\"{}\"", column), ordering);
                     query.add_order_by(order);
                 }
             }
@@ -2216,7 +2087,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     #[serial]
     fn test_real_datatype() {
         let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
@@ -2269,7 +2139,6 @@ mod tests {
 
     #[test]
     #[serial]
-    #[ignore]
     fn test_json_datatype() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
@@ -2334,9 +2203,264 @@ mod tests {
         };
     }
 
-    //#[test]
-    //#[serial]
-    //fn test_query() {
-    //    assert_eq!(1, 2);
-    //}
+    use crate::{parse, transduce};
+    use urlencoding::{decode, encode};
+
+    #[test]
+    fn test_query_table() {
+        // Select all columns from the table "bar", with no filtering. Note that table names and
+        // column names are always rendered in double quotes in SQL.
+        let from_url = "bar";
+        let expected_sql = "SELECT * FROM \"bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, select.to_url().unwrap());
+    }
+
+    #[test]
+    fn test_query_table_with_spaces() {
+        // Table names with spaces can be specified in a URL.
+        let from_url = "a bar";
+        let expected_sql = "SELECT * FROM \"a bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(encode(from_url), select.to_url().unwrap());
+    }
+
+    #[test]
+    fn test_query_table_with_encoded_spaces() {
+        // Alternately, spaces can in table names can be specified in a URL using percent encoding.
+        let from_url = "a%20bar";
+        let expected_sql = "SELECT * FROM \"a bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_table_with_quotes() {
+        // Quoted strings in table names are not allowed.
+        let from_url = "\"a bar\"";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_table_with_encoded_quotes() {
+        // Quoted strings in table names are not allowed, even if the quotes are encoded.
+        let from_url = "%22a%20bar%22";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    fn test_query_select() {
+        // Select the columns "foo" and "goo" from the table "bar" with no filtering.
+        let from_url = "bar?select=foo,goo";
+        let expected_sql = "SELECT \"foo\", \"goo\" FROM \"bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(encode(from_url), select.to_url().unwrap());
+    }
+
+    #[test]
+    fn test_query_select_with_spaces() {
+        // Column names with spaces are allowed in a URL.
+        let from_url = "bar?select=foo moo,goo";
+        let expected_sql = "SELECT \"foo moo\", \"goo\" FROM \"bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(encode(from_url), select.to_url().unwrap());
+    }
+
+    #[test]
+    fn test_query_select_with_encoded_spaces() {
+        // Column names with spaces are allowed in a URL.
+        let from_url = "bar?select=foo%20moo,goo%20hoo";
+        let expected_sql = "SELECT \"foo moo\", \"goo hoo\" FROM \"bar\"";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_select_with_quotes() {
+        // Quoted strings in column names are not allowed in a URL.
+        let from_url = "bar?select=\"foo moo\",goo";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_select_with_encoded_quotes() {
+        // Quoted strings in column names are not allowed in a URL, not even when the quotes are
+        // encoded.
+        let from_url = "bar?select=%22foo%20moo%22,goo";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    fn test_query_filter_columns() {
+        // Column names in filters are handled similarly to column names in select clauses:
+        let from_url = "bar?\
+                        column 1=eq.5\
+                        &column_2=eq.10\
+                        &column%203=eq.30";
+        let expected_sql = "SELECT * FROM \"bar\" \
+                            WHERE \"column 1\" = 5 \
+                            AND \"column_2\" = 10 \
+                            AND \"column 3\" = 30";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_filter_columns_with_quotes() {
+        // Quotes are not allowed in column names in URLs.
+        let from_url = "bar?\"column 1\"=eq.5";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_query_filter_columns_with_encoded_quotes() {
+        // Quotes are not allowed in column names in URLs, even when they are encoded.
+        let from_url = "bar?%22column 1%22=eq.5";
+        let select = parse(from_url).unwrap();
+    }
+
+    #[test]
+    fn test_query_values() {
+        // Double quotes may be used when specifying literal string values. This is mandatory if
+        // a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (otherwise, in
+        // 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
+        // rendered within single quotes in SQL. When converting the parsed Select struct back to a
+        // URL, these values will never be enclosed in double-quotes in the URL except for the case
+        // of a numeric string.
+        let from_url = "bar?c1=eq.Henry%20Kissinger\
+                        &c2=in.(Jim%20McMahon,William Perry,\"72\",Nancy,NULL)\
+                        &c3=eq.Fred";
+        let expected_sql = "SELECT * FROM \"bar\" WHERE \"c1\" = 'Henry Kissinger' \
+                            AND \"c2\" IN ('Jim McMahon', 'William Perry', '72', 'Nancy', NULL) \
+                            AND \"c3\" = 'Fred'";
+        let select = parse(&from_url).unwrap();
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_query_nulls() {
+        // NULL values are treated differently from literal values (i.e., they are not rendered in
+        // quotes). Note also that they are not converted to uppercase in the generated SQL:
+        let from_url = "bar?select=c1,c2&c1=not_eq.null";
+        let expected_sql = "SELECT \"c1\", \"c2\" FROM \"bar\" WHERE \"c1\" <> null";
+        let select = parse(&from_url).unwrap();
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_order_by() {
+        // Columns in order_by clauses are handled similarly to table and column names.
+        let from_url = "bar?order=foo1.asc,foo2.desc,foo3.asc";
+        let expected_sql =
+            "SELECT * FROM \"bar\" ORDER BY \"foo1\" ASC, \"foo2\" DESC, \"foo3\" ASC";
+        let select = parse(&from_url).unwrap();
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_order_by_with_spaces() {
+        // Columns in order_by clauses are handled similarly to table and column names.
+        let from_url = "bar?order=foo%201.asc,foo 2.desc,foo3.asc";
+        let expected_sql =
+            "SELECT * FROM \"bar\" ORDER BY \"foo 1\" ASC, \"foo 2\" DESC, \"foo3\" ASC";
+        let select = parse(&from_url).unwrap();
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn test_limit_and_offset() {
+        let from_url = "bar?order=foo1.desc,foo 2.asc,foo%205.desc&limit=10&offset=30";
+        let expected_sql = "SELECT * FROM \"bar\" \
+                            ORDER BY \"foo1\" DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+                            LIMIT 10 OFFSET 30";
+        let select = parse(from_url).unwrap();
+        assert_eq!(expected_sql, select.to_sqlite().unwrap());
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+    }
+
+    // TODO: Allow values with "reserved characters" (see postgrest docs) in quotes.
+
+    // TODO (not urgent): to_url() should guard against including things like functions
+    // (count(*) etc.) in column names.
+
+    /*
+    // TODO: Add this more comprehensive test to the doctests.
+    #[test]
+    fn test_query_10() {
+        // TODO: Rewrite this comment:
+        // More complicated example. Note that it is not necessary to use double quotes around literal
+        // strings that are not numbers and do not contain spaces, but we do so below so that the
+        // assert statement will pass, because the to_url() function will render all literal strings
+        // using double quotes.
+        let from_url = "a%20bar?\
+                        select=foo1,foo 2,foo%205\
+                        &foo1=eq.0\
+                        &foo 2=not_eq.\"10\"\
+                        &foo3=lt.20\
+                        &foo4=gt.5\
+                        &foo%205=lte.30\
+                        &foo6=gte.60\
+                        &foo7=like.\"alpha\"\
+                        &foo8=not_like.\"abby normal\"\
+                        &foo9=ilike.\"beta\"\
+                        &foo10=not_ilike.\"gamma\"\
+                        &foo11=is.NULL\
+                        &foo12=not_is.NULL\
+                        &foo13=eq.\"terrible\"\
+                        &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
+                        &foo15=not_in.(1,2,3)\
+                        &order=foo1.desc,foo 2.asc,foo%205.desc\
+                        &limit=10\
+                        &offset=30";
+
+        let expected_sql = "SELECT foo1, \"foo 2\", \"foo 5\" \
+                            FROM \"a bar\" \
+                            WHERE foo1 = 0 \
+                            AND \"foo 2\" <> '10' \
+                            AND foo3 < 20 \
+                            AND foo4 > 5 \
+                            AND \"foo 5\" <= 30 \
+                            AND foo6 >= 60 \
+                            AND foo7 LIKE 'alpha' \
+                            AND foo8 NOT LIKE 'abby normal' \
+                            AND foo9 ILIKE 'beta' \
+                            AND foo10 NOT ILIKE 'gamma' \
+                            AND foo11 IS NOT DISTINCT FROM NULL \
+                            AND foo12 IS DISTINCT FROM NULL \
+                            AND foo13 = 'terrible' \
+                            AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
+                            AND foo15 NOT IN (1, 2, 3) \
+                            ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+                            LIMIT 10 \
+                            OFFSET 30";
+
+        let select = parse(&from_url).unwrap();
+        assert_eq!(expected_sql, select.to_postgres().unwrap());
+        assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+    }
+    */
 }

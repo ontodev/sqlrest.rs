@@ -18,5 +18,6 @@ tree-sitter = "~0.20.6"
 urlencoding = "2.1.2"
 
 [dependencies.tree-sitter-sqlrest]
-git = "https://github.com/ontodev/tree-sitter-sqlrest"
-rev = "0efbeb4ba0c77f8a8f26453e54c3cd3a6e1eb181"
+path = "../tree-sitter-sqlrest"
+# git = "https://github.com/ontodev/tree-sitter-sqlrest"
+# rev = "1cba22499734dd99fbc85e08895d995866a646d0"
