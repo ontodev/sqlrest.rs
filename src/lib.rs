@@ -367,15 +367,16 @@
 //! ```rust
 //! use ontodev_sqlrest::parse;
 //! use urlencoding::{decode, encode};
-//! // Table names and column names are always rendered in double quotes in SQL.
+//!
 //! let from_url = "bar";
+//! // Table names and column names are always rendered in double quotes in SQL:
 //! let expected_sql = "SELECT * FROM \"bar\"";
 //! let select = parse(from_url).unwrap();
 //! assert_eq!(expected_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(from_url, select.to_url().unwrap());
 //!
-//! // Table names with spaces can be specified in a URL.
+//! // Table names with spaces can be specified in a URL:
 //! let from_url = "a bar";
 //! let expected_sql = "SELECT * FROM \"a bar\"";
 //! let select = parse(from_url).unwrap();
@@ -383,7 +384,7 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
 //!
-//! // Alternately, spaces can in table names can be specified in a URL using percent encoding.
+//! // Alternately, spaces can in table names can be specified in a URL using percent encoding:
 //! let from_url = "a%20bar";
 //! let expected_sql = "SELECT * FROM \"a bar\"";
 //! let select = parse(from_url).unwrap();
@@ -391,12 +392,12 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //!
-//! // Quoted strings in table names are not allowed.
+//! // Quoted strings in table names are not allowed:
 //! let from_url = "\"a bar\"";
 //! let result = parse(from_url);
 //! assert!(result.is_err());
 //!
-//! // Quoted strings in table names are not allowed, even if the quotes are encoded.
+//! // Quoted strings in table names are not allowed, even if the quotes are encoded:
 //! let from_url = "%22a%20bar%22";
 //! let result = parse(from_url);
 //! assert!(result.is_err());
@@ -413,7 +414,7 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
 //!
-//! // Column names with spaces are allowed in a URL.
+//! // Column names with spaces are allowed in a URL:
 //! let from_url = "bar?select=foo moo,goo";
 //! let expected_sql = "SELECT \"foo moo\", \"goo\" FROM \"bar\"";
 //! let select = parse(from_url).unwrap();
@@ -421,7 +422,7 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
 //!
-//! // Column names with spaces are allowed in a URL.
+//! // Column names with percent-encoded spaces are allowed in a URL:
 //! let from_url = "bar?select=foo%20moo,goo%20hoo";
 //! let expected_sql = "SELECT \"foo moo\", \"goo hoo\" FROM \"bar\"";
 //! let select = parse(from_url).unwrap();
@@ -435,7 +436,7 @@
 //! assert!(result.is_err());
 //!
 //! // Quoted strings in column names are not allowed in a URL, not even when the quotes are
-//! // encoded.
+//! // percent-encoded.
 //! let from_url = "bar?select=%22foo%20moo%22,goo";
 //! let result = parse(from_url);
 //! assert!(result.is_err());
@@ -471,15 +472,15 @@
 //! ```
 //!
 //! ### Literals and NULLs
+//! <i>Double quotes may be used when specifying literal string values. This is mandatory if
+//! a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (otherwise, in
+//! 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
+//! rendered within single quotes in SQL. When converting the parsed Select struct back to a
+//! URL, these values will never be enclosed in double-quotes in the URL except for the case
+//! of a numeric string or a string containing one of the reserved chars (see [RESERVED]).</i>
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
-//! // Double quotes may be used when specifying literal string values. This is mandatory if
-//! // a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (otherwise, in
-//! // 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
-//! // rendered within single quotes in SQL. When converting the parsed Select struct back to a
-//! // URL, these values will never be enclosed in double-quotes in the URL except for the case
-//! // of a numeric string or a string containing one of the reserved chars (see [RESERVED]).
 //! let from_url = "bar?c1=eq.Henry%20Kissinger\
 //!                 &c2=in.(\"McMahon, Jim\",William Perry,\"72\",Nancy,NULL)\
 //!                 &c3=eq.Fred";
@@ -503,7 +504,7 @@
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
-//! // Columns in order_by clauses are handled similarly to table and column names.
+//! // Columns in order_by clauses are handled similarly to table and column names:
 //! let from_url = "bar?order=foo1.asc,foo2.desc,foo3.asc";
 //! let expected_sql =
 //!     "SELECT * FROM \"bar\" ORDER BY \"foo1\" ASC, \"foo2\" DESC, \"foo3\" ASC";
@@ -518,7 +519,7 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //!
-//! // Arguments to `limit` and `order` must be interger-valued.
+//! // Arguments to `limit` and `order` must be interger-valued:
 //! let from_url = "bar?order=foo1.desc,foo 2.asc,foo%205.desc&limit=10&offset=30";
 //! let expected_sql = "SELECT * FROM \"bar\" \
 //!                     ORDER BY \"foo1\" DESC, \"foo 2\" ASC, \"foo 5\" DESC \
