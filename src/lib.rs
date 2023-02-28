@@ -2,8 +2,7 @@
 //!      in src/lib.rs, install cargo-readme using `cargo install cargo-readme` and then run:
 //!      `cargo readme > README.md` -->
 //!
-//! ## Examples
-//! ### Working with Select structs
+//! ## Working with Select structs
 //! ```rust
 //! use ontodev_sqlrest::{
 //!     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
@@ -363,8 +362,8 @@
 //! #     }
 //! }
 //! ```
-//! ### Parsing Selects from URLs and vice versa.
-//! #### Select all columns from the table "bar", with no filtering.
+//! ## Parsing Selects from URLs and vice versa.
+//! ### Select all columns from the table "bar", with no filtering.
 //! Table names and column names are always rendered in double quotes in SQL.
 //! ```rust
 //! use ontodev_sqlrest::parse;
@@ -419,7 +418,7 @@
 //! assert!(result.is_err());
 //! ```
 //!
-//! #### Select the columns "foo" and "goo" from the table "bar" with no filtering.
+//! ### Select the columns "foo" and "goo" from the table "bar" with no filtering.
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
@@ -474,7 +473,7 @@
 //! assert!(result.is_err());
 //! ```
 //!
-//! #### Select all columns from the table, bar, with filtering.
+//! ### Select all columns from the table, bar, with filtering.
 //! Column names in filters are handled similarly to column names in select clauses.
 //! ```rust
 //! # use ontodev_sqlrest::parse;
@@ -511,7 +510,7 @@
 //! assert!(result.is_err());
 //! ```
 //!
-//! #### Literals and NULLs
+//! ### Literals and NULLs
 //! Double quotes may be used when specifying literal string values. This is mandatory if
 //! a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (otherwise, in
 //! 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
@@ -544,7 +543,7 @@
 //! assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
 //! ```
 //!
-//! #### ORDER BY, LIMIT, and OFFSET
+//! ### ORDER BY, LIMIT, and OFFSET
 //! Columns in order_by clauses are handled similarly to table and column names.
 //! ```rust
 //! # use ontodev_sqlrest::parse;
@@ -577,7 +576,7 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! ```
 //!
-//! #### A more complicated example:
+//! ### A more complicated example:
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::decode;
