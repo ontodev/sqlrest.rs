@@ -4,7 +4,8 @@
      in src/lib.rs, install cargo-readme using `cargo install cargo-readme` and then run:
      `cargo readme > README.md` -->
 
-### Working with Select structs
+### Examples
+#### Working with Select structs
 ```rust
 use ontodev_sqlrest::{
     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
@@ -235,10 +236,190 @@ for pool in vec![sqlite_pool, postgresql_pool] {
             .unwrap();
 }
 ```
-### Parsing Selects from URLs and vice versa.
+#### Parsing Selects from URLs and vice versa.
+##### Select all columns from the table "bar", with no filtering.
+Table names and column names are always rendered in double quotes in SQL.
 ```rust
 use ontodev_sqlrest::parse;
-use urlencoding::decode;
+use urlencoding::{decode, encode};
+let from_url = "bar";
+let expected_sql = "SELECT * FROM \"bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(from_url, select.to_url().unwrap());
+```
+
+Table names with spaces can be specified in a URL.
+```rust
+let from_url = "a bar";
+let expected_sql = "SELECT * FROM \"a bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(encode(from_url), select.to_url().unwrap());
+```
+
+Alternately, spaces can in table names can be specified in a URL using percent encoding.
+```rust
+let from_url = "a%20bar";
+let expected_sql = "SELECT * FROM \"a bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+```
+
+Quoted strings in table names are not allowed.
+```rust
+let from_url = "\"a bar\"";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+Quoted strings in table names are not allowed, even if the quotes are encoded.
+```rust
+let from_url = "%22a%20bar%22";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+##### Select the columns "foo" and "goo" from the table "bar" with no filtering.
+```rust
+let from_url = "bar?select=foo,goo";
+let expected_sql = "SELECT \"foo\", \"goo\" FROM \"bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(encode(from_url), select.to_url().unwrap());
+```
+
+Column names with spaces are allowed in a URL.
+```rust
+let from_url = "bar?select=foo moo,goo";
+let expected_sql = "SELECT \"foo moo\", \"goo\" FROM \"bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(encode(from_url), select.to_url().unwrap());
+```
+
+Column names with spaces are allowed in a URL.
+```rust
+let from_url = "bar?select=foo%20moo,goo%20hoo";
+let expected_sql = "SELECT \"foo moo\", \"goo hoo\" FROM \"bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+```
+
+Quoted strings in column names are not allowed in a URL.
+```rust
+let from_url = "bar?select=\"foo moo\",goo";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+Quoted strings in column names are not allowed in a URL, not even when the quotes are
+encoded.
+```rust
+let from_url = "bar?select=%22foo%20moo%22,goo";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+##### Select all columns from the table, bar, with filtering.
+Column names in filters are handled similarly to column names in select clauses.
+```rust
+let from_url = "bar?\
+                column 1=eq.5\
+                &column_2=eq.10\
+                &column%203=eq.30";
+let expected_sql = "SELECT * FROM \"bar\" \
+                    WHERE \"column 1\" = 5 \
+                    AND \"column_2\" = 10 \
+                    AND \"column 3\" = 30";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+```
+
+Quotes are not allowed in column names in URLs.
+```rust
+let from_url = "bar?\"column 1\"=eq.5";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+Quotes are not allowed in column names in URLs, even when they are encoded.
+```rust
+let from_url = "bar?%22column 1%22=eq.5";
+let result = parse(from_url);
+assert!(result.is_err());
+```
+
+##### Literals and NULLs
+Double quotes may be used when specifying literal string values. This is mandatory if
+a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (otherwise, in
+'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
+rendered within single quotes in SQL. When converting the parsed Select struct back to a
+URL, these values will never be enclosed in double-quotes in the URL except for the case
+of a numeric string or a string containing one of the reserved chars (see [RESERVED]).
+```rust
+let from_url = "bar?c1=eq.Henry%20Kissinger\
+                &c2=in.(\"McMahon, Jim\",William Perry,\"72\",Nancy,NULL)\
+                &c3=eq.Fred";
+let expected_sql = "SELECT * FROM \"bar\" WHERE \"c1\" = 'Henry Kissinger' \
+                    AND \"c2\" IN ('McMahon, Jim', 'William Perry', '72', 'Nancy', NULL) \
+                    AND \"c3\" = 'Fred'";
+let select = parse(&from_url).unwrap();
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+```
+
+NULL values are treated differently from literal values (i.e., they are not rendered in
+quotes). Note also that they are not converted to uppercase in the generated SQL:
+```rust
+let from_url = "bar?select=c1,c2&c1=not_eq.null";
+let expected_sql = "SELECT \"c1\", \"c2\" FROM \"bar\" WHERE \"c1\" <> null";
+let select = parse(&from_url).unwrap();
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
+```
+
+##### ORDER BY, LIMIT, and OFFSET
+Columns in order_by clauses are handled similarly to table and column names.
+```rust
+let from_url = "bar?order=foo1.asc,foo2.desc,foo3.asc";
+let expected_sql =
+    "SELECT * FROM \"bar\" ORDER BY \"foo1\" ASC, \"foo2\" DESC, \"foo3\" ASC";
+let select = parse(&from_url).unwrap();
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(from_url, decode(&select.to_url().unwrap()).unwrap());
+
+let from_url = "bar?order=foo%201.asc,foo 2.desc,foo3.asc";
+let expected_sql =
+    "SELECT * FROM \"bar\" ORDER BY \"foo 1\" ASC, \"foo 2\" DESC, \"foo3\" ASC";
+let select = parse(&from_url).unwrap();
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+```
+
+Arguments to `limit` and `order` must be interger-valued.
+```rust
+let from_url = "bar?order=foo1.desc,foo 2.asc,foo%205.desc&limit=10&offset=30";
+let expected_sql = "SELECT * FROM \"bar\" \
+                    ORDER BY \"foo1\" DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+                    LIMIT 10 OFFSET 30";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+```
+
+##### A more complicated example:
+```rust
 
 let from_url = "a%20bar?\
                 select=foo1,foo 2,foo%205\
