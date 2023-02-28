@@ -363,11 +363,60 @@
 //! }
 //! ```
 //! ## Parsing Selects from URLs and vice versa.
-//! ```rust,ignore
+//! ```rust
+//! use ontodev_sqlrest::parse;
+//! use urlencoding::decode;
+//!
+//! let from_url = "a%20bar?\
+//!                 select=foo1,foo 2,foo%205\
+//!                 &foo1=eq.0\
+//!                 &foo 2=not_eq.\"10\"\
+//!                 &foo3=lt.20\
+//!                 &foo4=gt.5\
+//!                 &foo%205=lte.30\
+//!                 &foo6=gte.60\
+//!                 &foo7=like.alpha\
+//!                 &foo8=not_like.abby normal\
+//!                 &foo9=ilike.beta\
+//!                 &foo10=not_ilike.gamma\
+//!                 &foo11=is.NULL\
+//!                 &foo12=not_is.NULL\
+//!                 &foo13=eq.terrible\
+//!                 &foo14=in.(A fancy hat,\"5\",C page 21,delicious,NULL)\
+//!                 &foo15=not_in.(1,2,3)\
+//!                 &order=foo1.desc,foo 2.asc,foo%205.desc\
+//!                 &limit=10\
+//!                 &offset=30";
+//!
+//! let expected_sql = "SELECT \"foo1\", \"foo 2\", \"foo 5\" \
+//!                     FROM \"a bar\" \
+//!                     WHERE \"foo1\" = 0 \
+//!                     AND \"foo 2\" <> '10' \
+//!                     AND \"foo3\" < 20 \
+//!                     AND \"foo4\" > 5 \
+//!                     AND \"foo 5\" <= 30 \
+//!                     AND \"foo6\" >= 60 \
+//!                     AND \"foo7\" LIKE 'alpha' \
+//!                     AND \"foo8\" NOT LIKE 'abby normal' \
+//!                     AND \"foo9\" ILIKE 'beta' \
+//!                     AND \"foo10\" NOT ILIKE 'gamma' \
+//!                     AND \"foo11\" IS NOT DISTINCT FROM NULL \
+//!                     AND \"foo12\" IS DISTINCT FROM NULL \
+//!                     AND \"foo13\" = 'terrible' \
+//!                     AND \"foo14\" IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
+//!                     AND \"foo15\" NOT IN (1, 2, 3) \
+//!                     ORDER BY \"foo1\" DESC, \"foo 2\" ASC, \"foo 5\" DESC \
+//!                     LIMIT 10 \
+//!                     OFFSET 30";
+//!
+//! let select = parse(&from_url).unwrap();
+//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //! ```
 
 use enquote::unquote;
 use futures::executor::block_on;
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as SerdeMap, Value as SerdeValue};
@@ -378,6 +427,15 @@ use sqlx::{
 use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
+
+lazy_static! {
+    /// List of reserved characters that are accepted as part of a literal value string in URL input
+    /// to the parse() function. Note that these must match the reserved characters accepted by the
+    /// [tree-sitter-sqlrest grammar](https://github.com/ontodev/tree-sitter-sqlrest) grammar (see
+    /// the file, Cargo.toml, in this repository for the specific version of tree-sitter-sqlrest
+    /// used).
+    static ref RESERVED: Vec<char> = vec![':', ',', '.', '(', ')'];
+}
 
 /// Representation of a database type. Currently only Postgres and Sqlite are supported.
 #[derive(Debug, PartialEq, Eq)]
@@ -503,7 +561,7 @@ pub struct Filter {
 
 /// Private helper function to surround the given string in double quotes if it is not already
 /// quoted and contains whitespace.
-fn maybe_quote(token: &str) -> String {
+fn quote_if_whitespace(token: &str) -> String {
     if (token.starts_with("\"") && token.ends_with("\"")) || !token.contains(char::is_whitespace) {
         token.to_string()
     } else {
@@ -673,74 +731,74 @@ impl Filter {
 
         match self.operator {
             Operator::Equals => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} = {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} = {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} = {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} = {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::NotEquals => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} <> {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} <> {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} <> {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} <> {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::LessThan => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} < {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} < {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} < {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} < {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::GreaterThan => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} > {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} > {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} > {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} > {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::LessThanEquals => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} <= {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} <= {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} <= {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} <= {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::GreaterThanEquals => match &self.rhs {
-                SerdeValue::String(s) => Ok(format!("{} >= {}", maybe_quote(&self.lhs), s)),
-                SerdeValue::Number(n) => Ok(format!("{} >= {}", maybe_quote(&self.lhs), n)),
+                SerdeValue::String(s) => Ok(format!("{} >= {}", quote_if_whitespace(&self.lhs), s)),
+                SerdeValue::Number(n) => Ok(format!("{} >= {}", quote_if_whitespace(&self.lhs), n)),
                 _ => Err(not_a_string_or_number_err),
             },
             Operator::Like => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_like_not_like(&maybe_quote(&self.lhs), &s, true)
+                    Self::render_like_not_like(&quote_if_whitespace(&self.lhs), &s, true)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::NotLike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_like_not_like(&maybe_quote(&self.lhs), &s, false)
+                    Self::render_like_not_like(&quote_if_whitespace(&self.lhs), &s, false)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::ILike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs), &s, true)
+                    Self::render_ilike_not_ilike(dbtype, &quote_if_whitespace(&self.lhs), &s, true)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::NotILike => match &self.rhs {
                 SerdeValue::String(s) => {
-                    Self::render_ilike_not_ilike(dbtype, &maybe_quote(&self.lhs), &s, false)
+                    Self::render_ilike_not_ilike(dbtype, &quote_if_whitespace(&self.lhs), &s, false)
                 }
                 _ => Err(not_a_string_err),
             },
             Operator::Is => {
-                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs), &self.rhs, true)
+                Self::render_is_not_is(dbtype, &quote_if_whitespace(&self.lhs), &self.rhs, true)
             }
             Operator::IsNot => {
-                Self::render_is_not_is(dbtype, &maybe_quote(&self.lhs), &self.rhs, false)
+                Self::render_is_not_is(dbtype, &quote_if_whitespace(&self.lhs), &self.rhs, false)
             }
             Operator::In => match &self.rhs {
                 SerdeValue::Array(options) => {
-                    Self::render_in_not_in(&maybe_quote(&self.lhs), options, true)
+                    Self::render_in_not_in(&quote_if_whitespace(&self.lhs), options, true)
                 }
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
             Operator::NotIn => match &self.rhs {
                 SerdeValue::Array(options) => {
-                    Self::render_in_not_in(&maybe_quote(&self.lhs), options, false)
+                    Self::render_in_not_in(&quote_if_whitespace(&self.lhs), options, false)
                 }
                 _ => Err(format!("RHS of filter: {:?} is not an array.", self)),
             },
@@ -961,7 +1019,7 @@ impl Select {
         } else {
             let mut select_columns = vec![];
             for (column, alias) in &self.select {
-                let column = maybe_quote(&column);
+                let column = quote_if_whitespace(&column);
                 select_columns.push(format!("{}{}", column, {
                     if let Some(alias) = alias {
                         format!(" AS {}", alias)
@@ -973,7 +1031,7 @@ impl Select {
             select_clause = select_columns.join(", ");
         }
 
-        let table = maybe_quote(&self.table);
+        let table = quote_if_whitespace(&self.table);
         let mut sql = format!("SELECT {} FROM {}", select_clause, table);
         if !self.filter.is_empty() {
             let where_clause = match filters_to_sql(&self.filter, &dbtype) {
@@ -997,7 +1055,7 @@ impl Select {
             let order_strings = self
                 .order_by
                 .iter()
-                .map(|(col, dir)| format!("{} {}", maybe_quote(&col), dir.to_sql()))
+                .map(|(col, dir)| format!("{} {}", quote_if_whitespace(&col), dir.to_sql()))
                 .collect::<Vec<String>>();
             sql.push_str(&format!("{}", order_strings.join(", ")));
         }
@@ -1033,9 +1091,12 @@ impl Select {
             params.push(format!("select={}", parts.join(",")));
         }
 
-        fn quote_if_numeric(token: &str) -> String {
+        // Helper function to surround any 'special' strings with double-quotes. These include
+        // strings composed entirely of numeric symbols, as well as strings containing one of the
+        // special reserved characters (see the static ref RESERVED defined above).
+        fn quote_special(token: &str) -> String {
             let token = unquote(&token).unwrap_or(token.to_string());
-            if token.chars().all(char::is_numeric) {
+            if token.chars().all(char::is_numeric) || RESERVED.iter().any(|&c| token.contains(c)) {
                 format!("\"{}\"", token)
             } else {
                 token.to_string()
@@ -1045,14 +1106,14 @@ impl Select {
         if self.filter.len() > 0 {
             for filter in &self.filter {
                 let rhs = match &filter.rhs {
-                    SerdeValue::String(s) => quote_if_numeric(&s),
+                    SerdeValue::String(s) => quote_special(&s),
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
                         let mut list = vec![];
                         for item in v {
                             match item {
                                 SerdeValue::String(s) => {
-                                    list.push(quote_if_numeric(&s));
+                                    list.push(quote_special(&s));
                                 }
                                 SerdeValue::Number(n) => list.push(n.to_string()),
                                 _ => {
@@ -1235,7 +1296,9 @@ pub fn get_from_raw(n: &Node, raw: &str) -> String {
     String::from(extract)
 }
 
-/// Given an input URL, parse it as a Select struct and return it.
+/// Given an input URL, parse it as a Select struct using the
+/// [tree-sitter-sqlrest grammar](https://github.com/ontodev/tree-sitter-sqlrest) (see Cargo.toml
+/// for the specific version used), and return it.
 pub fn parse(url: &str) -> Result<Select, String> {
     let url = {
         match decode(url) {
@@ -2203,7 +2266,8 @@ mod tests {
         };
     }
 
-    use crate::{parse, transduce};
+    // TODO: Move the tests below to the documentation tests:
+    use crate::parse;
     use urlencoding::{decode, encode};
 
     #[test]
@@ -2245,7 +2309,7 @@ mod tests {
     fn test_query_table_with_quotes() {
         // Quoted strings in table names are not allowed.
         let from_url = "\"a bar\"";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2253,7 +2317,7 @@ mod tests {
     fn test_query_table_with_encoded_quotes() {
         // Quoted strings in table names are not allowed, even if the quotes are encoded.
         let from_url = "%22a%20bar%22";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2294,7 +2358,7 @@ mod tests {
     fn test_query_select_with_quotes() {
         // Quoted strings in column names are not allowed in a URL.
         let from_url = "bar?select=\"foo moo\",goo";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2303,7 +2367,7 @@ mod tests {
         // Quoted strings in column names are not allowed in a URL, not even when the quotes are
         // encoded.
         let from_url = "bar?select=%22foo%20moo%22,goo";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2328,7 +2392,7 @@ mod tests {
     fn test_query_filter_columns_with_quotes() {
         // Quotes are not allowed in column names in URLs.
         let from_url = "bar?\"column 1\"=eq.5";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2336,7 +2400,7 @@ mod tests {
     fn test_query_filter_columns_with_encoded_quotes() {
         // Quotes are not allowed in column names in URLs, even when they are encoded.
         let from_url = "bar?%22column 1%22=eq.5";
-        let select = parse(from_url).unwrap();
+        parse(from_url).unwrap();
     }
 
     #[test]
@@ -2346,12 +2410,13 @@ mod tests {
         // 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
         // rendered within single quotes in SQL. When converting the parsed Select struct back to a
         // URL, these values will never be enclosed in double-quotes in the URL except for the case
-        // of a numeric string.
+        // of a numeric string or a string containing one of the reserved chars (see the static ref
+        // RESERVED defined above).
         let from_url = "bar?c1=eq.Henry%20Kissinger\
-                        &c2=in.(Jim%20McMahon,William Perry,\"72\",Nancy,NULL)\
+                        &c2=in.(\"McMahon, Jim\",William Perry,\"72\",Nancy,NULL)\
                         &c3=eq.Fred";
         let expected_sql = "SELECT * FROM \"bar\" WHERE \"c1\" = 'Henry Kissinger' \
-                            AND \"c2\" IN ('Jim McMahon', 'William Perry', '72', 'Nancy', NULL) \
+                            AND \"c2\" IN ('McMahon, Jim', 'William Perry', '72', 'Nancy', NULL) \
                             AND \"c3\" = 'Fred'";
         let select = parse(&from_url).unwrap();
         assert_eq!(expected_sql, select.to_postgres().unwrap());
@@ -2401,66 +2466,4 @@ mod tests {
         assert_eq!(expected_sql, select.to_sqlite().unwrap());
         assert_eq!(expected_sql, select.to_postgres().unwrap());
     }
-
-    // TODO: Allow values with "reserved characters" (see postgrest docs) in quotes.
-
-    // TODO (not urgent): to_url() should guard against including things like functions
-    // (count(*) etc.) in column names.
-
-    /*
-    // TODO: Add this more comprehensive test to the doctests.
-    #[test]
-    fn test_query_10() {
-        // TODO: Rewrite this comment:
-        // More complicated example. Note that it is not necessary to use double quotes around literal
-        // strings that are not numbers and do not contain spaces, but we do so below so that the
-        // assert statement will pass, because the to_url() function will render all literal strings
-        // using double quotes.
-        let from_url = "a%20bar?\
-                        select=foo1,foo 2,foo%205\
-                        &foo1=eq.0\
-                        &foo 2=not_eq.\"10\"\
-                        &foo3=lt.20\
-                        &foo4=gt.5\
-                        &foo%205=lte.30\
-                        &foo6=gte.60\
-                        &foo7=like.\"alpha\"\
-                        &foo8=not_like.\"abby normal\"\
-                        &foo9=ilike.\"beta\"\
-                        &foo10=not_ilike.\"gamma\"\
-                        &foo11=is.NULL\
-                        &foo12=not_is.NULL\
-                        &foo13=eq.\"terrible\"\
-                        &foo14=in.(\"A fancy hat\",\"5\",\"C page 21\",\"delicious\",NULL)\
-                        &foo15=not_in.(1,2,3)\
-                        &order=foo1.desc,foo 2.asc,foo%205.desc\
-                        &limit=10\
-                        &offset=30";
-
-        let expected_sql = "SELECT foo1, \"foo 2\", \"foo 5\" \
-                            FROM \"a bar\" \
-                            WHERE foo1 = 0 \
-                            AND \"foo 2\" <> '10' \
-                            AND foo3 < 20 \
-                            AND foo4 > 5 \
-                            AND \"foo 5\" <= 30 \
-                            AND foo6 >= 60 \
-                            AND foo7 LIKE 'alpha' \
-                            AND foo8 NOT LIKE 'abby normal' \
-                            AND foo9 ILIKE 'beta' \
-                            AND foo10 NOT ILIKE 'gamma' \
-                            AND foo11 IS NOT DISTINCT FROM NULL \
-                            AND foo12 IS DISTINCT FROM NULL \
-                            AND foo13 = 'terrible' \
-                            AND foo14 IN ('A fancy hat', '5', 'C page 21', 'delicious', NULL) \
-                            AND foo15 NOT IN (1, 2, 3) \
-                            ORDER BY foo1 DESC, \"foo 2\" ASC, \"foo 5\" DESC \
-                            LIMIT 10 \
-                            OFFSET 30";
-
-        let select = parse(&from_url).unwrap();
-        assert_eq!(expected_sql, select.to_postgres().unwrap());
-        assert_eq!(decode(&from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
-    }
-    */
 }
