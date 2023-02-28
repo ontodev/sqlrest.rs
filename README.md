@@ -346,7 +346,8 @@ a number is required to be interpreted as a string, e.g., 'foo=eq.\"10\"' (other
 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
 rendered within single quotes in SQL. When converting the parsed Select struct back to a
 URL, these values will never be enclosed in double-quotes in the URL except for the case
-of a numeric string or a string containing one of the reserved chars (see [RESERVED]).</i>
+of a numeric string or a string containing one of the reserved chars
+(see [RESERVED](RESERVED)).</i>
 ```rust
 let from_url = "bar?c1=eq.Henry%20Kissinger\
                 &c2=in.(\"McMahon, Jim\",William Perry,\"72\",Nancy,NULL)\

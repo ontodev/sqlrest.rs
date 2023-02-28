@@ -477,7 +477,8 @@
 //! 'foo=eq.10', 10 is interpreted as a number). Note that all literal string values will be
 //! rendered within single quotes in SQL. When converting the parsed Select struct back to a
 //! URL, these values will never be enclosed in double-quotes in the URL except for the case
-//! of a numeric string or a string containing one of the reserved chars (see [RESERVED]).</i>
+//! of a numeric string or a string containing one of the reserved chars
+//! (see [RESERVED](RESERVED)).</i>
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
