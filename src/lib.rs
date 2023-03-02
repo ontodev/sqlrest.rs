@@ -1243,16 +1243,54 @@ impl Select {
         Ok(sql)
     }
 
-    /// Convert the given Select struct to a SQLRest URL. Returns an error if `self.table` or
-    /// `self.select` have not been defined.
+    /// Convert the given Select struct to an SQL statement using Postgres syntax. This is a
+    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Postgres).
+    pub fn to_postgres(&self) -> Result<String, String> {
+        self.to_sql(&DbType::Postgres)
+    }
+
+    /// Convert the given Select struct to an SQL statement using Sqlite syntax. This is a
+    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Sqlite).
+    pub fn to_sqlite(&self) -> Result<String, String> {
+        self.to_sql(&DbType::Sqlite)
+    }
+
+    /// TODO: Add a docstring here.
+    pub fn to_sql_count(&self, dbtype: &DbType) -> Result<String, String> {
+        let mut count_select = self.clone();
+        count_select.order_by.clear();
+        count_select.limit = None;
+        count_select.offset = None;
+        let inner_sql = count_select.to_sql(dbtype);
+        match inner_sql {
+            Ok(inner_sql) => Ok(format!("SELECT COUNT(1) FROM ({}) AS t", inner_sql)),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// TODO: Add a docstring here.
+    pub fn to_sqlite_count(&self) -> Result<String, String> {
+        self.to_sql_count(&DbType::Sqlite)
+    }
+
+    /// TODO: Add a docstring here.
+    pub fn to_postgres_count(&self) -> Result<String, String> {
+        self.to_sql_count(&DbType::Postgres)
+    }
+
+    /// Convert the given Select struct to a SQLRest URL. Returns an error in the following
+    /// circumstances:
+    /// - The `table` field has not been defined or it contains characters other than word
+    ///   characters, underscores, and spaces.
+    /// - One of the columns included in the `select`, `order_by`, or `filter` fields contains
+    ///   characters other than word characters, underscores, and spaces.
+    /// - The `group_by` or `having` clauses have been defined (these aren't supported by to_url()).
     pub fn to_url(&self) -> Result<String, String> {
         if self.table.is_empty() {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
         if !self.group_by.is_empty() || !self.having.is_empty() {
-            return Err(
-                "GROUP BY / HAVING clauses are not supported in Select::to_url()".to_string()
-            );
+            return Err("GROUP BY / HAVING clauses are not supported in to_url()".to_string());
         }
 
         // Helper function to surround any 'special' strings with double-quotes. These include
@@ -1272,7 +1310,7 @@ impl Select {
         fn is_simple(db_object_name: &str) -> Result<(), String> {
             if !DB_OBJECT_REGEX.is_match(db_object_name) {
                 Err(format!(
-                    "Illegal database object name: '{}'. All names must match: '{}'.",
+                    "Illegal database object name: '{}'. All names must match: '{}' for to_url().",
                     db_object_name, DB_OBJECT_MATCH_STR,
                 ))
             } else {
@@ -1375,18 +1413,6 @@ impl Select {
         } else {
             Ok(encode(&table.clone()).to_string())
         }
-    }
-
-    /// Convert the given Select struct to an SQL statement using Postgres syntax. This is a
-    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Postgres).
-    pub fn to_postgres(&self) -> Result<String, String> {
-        self.to_sql(&DbType::Postgres)
-    }
-
-    /// Convert the given Select struct to an SQL statement using Sqlite syntax. This is a
-    /// convenience method implemented as a wrapper around a call to to_sql(&DbType::Sqlite).
-    pub fn to_sqlite(&self) -> Result<String, String> {
-        self.to_sql(&DbType::Sqlite)
     }
 
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
@@ -2490,5 +2516,12 @@ mod tests {
 
         select.table("My^Flurb");
         select.to_url().unwrap();
+    }
+
+    #[test]
+    fn test_count() {
+        let select = Select::new("my_table");
+        let sql = select.to_sql_count(&DbType::Sqlite).unwrap();
+        assert_eq!(sql, "SELECT COUNT(1) FROM (SELECT * FROM my_table) AS t");
     }
 }
