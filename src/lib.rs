@@ -478,7 +478,7 @@
 //! rendered within single quotes in SQL. When converting the parsed Select struct back to a
 //! URL, these values will never be enclosed in double-quotes in the URL except for the case
 //! of a numeric string or a string containing one of the reserved chars
-//! (see ontodev_sqlrest::RESERVED]).</i>
+//! (see ontodev_sqlrest::RESERVED).</i>
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
@@ -596,6 +596,8 @@ use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
 
+pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ ]+$";
+
 lazy_static! {
     /// List of reserved characters that are accepted as part of a literal value string in URL input
     /// to the parse() function. Note that these must match the reserved characters accepted by the
@@ -603,6 +605,11 @@ lazy_static! {
     /// the file, Cargo.toml, in this repository for the specific version of tree-sitter-sqlrest
     /// used).
     static ref RESERVED: Vec<char> = vec![':', ',', '.', '(', ')'];
+
+    /// Regular expression object used to match against database object names (table names, column
+    /// names, etc.).
+    #[derive(Debug)]
+    static ref DB_OBJECT_REGEX: Regex = Regex::new(DB_OBJECT_MATCH_STR).unwrap();
 }
 
 /// Representation of a database type. Currently only Postgres and Sqlite are supported.
@@ -1248,17 +1255,6 @@ impl Select {
             );
         }
 
-        let mut params: Vec<String> = vec![];
-        if self.select.len() > 0 {
-            let parts: Vec<String> = self
-                .select
-                .iter()
-                // TODO: Handle aliases. See https://postgrest.org/en/stable/api.html#renaming-columns
-                .map(|(column, _alias)| unquote(column).unwrap_or(column.to_string()))
-                .collect();
-            params.push(format!("select={}", parts.join(",")));
-        }
-
         // Helper function to surround any 'special' strings with double-quotes. These include
         // strings composed entirely of numeric symbols, as well as strings containing one of the
         // special reserved characters (see the static ref RESERVED defined above).
@@ -1269,6 +1265,32 @@ impl Select {
             } else {
                 token.to_string()
             }
+        }
+
+        // Helper function to determine whether the given name is 'simple', i.e., such as to match
+        // the DB_OBJECT_REGEX defined above.
+        fn is_simple(db_object_name: &str) -> Result<(), String> {
+            if !DB_OBJECT_REGEX.is_match(db_object_name) {
+                Err(format!(
+                    "Illegal database object name: '{}'. All names must match: '{}'.",
+                    db_object_name, DB_OBJECT_MATCH_STR,
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        let mut params = vec![];
+        if self.select.len() > 0 {
+            let mut parts = vec![];
+            for (column, _alias) in &self.select {
+                let column = unquote(column).unwrap_or(column.to_string());
+                if let Err(e) = is_simple(&column) {
+                    return Err(format!("While reading SELECT field, got error: {}", e));
+                }
+                parts.push(column);
+            }
+            params.push(format!("select={}", parts.join(",")));
         }
 
         if self.filter.len() > 0 {
@@ -1303,6 +1325,9 @@ impl Select {
                 };
 
                 let lhs = unquote(&filter.lhs).unwrap_or(filter.lhs.to_string());
+                if let Err(e) = is_simple(&lhs) {
+                    return Err(format!("While reading filters, got error: {}", e));
+                }
                 let x = match filter.operator {
                     Operator::Equals => format!(r#"{}=eq.{}"#, lhs, rhs),
                     Operator::NotEquals => format!(r#"{}=not_eq.{}"#, lhs, rhs),
@@ -1323,11 +1348,15 @@ impl Select {
             }
         }
         if self.order_by.len() > 0 {
-            let parts: Vec<String> = self
-                .order_by
-                .iter()
-                .map(|(c, d)| format!(r"{}.{}", unquote(c).unwrap_or(c.to_string()), d.to_url()))
-                .collect();
+            let mut parts = vec![];
+            for (column, direction) in &self.order_by {
+                let column = unquote(column).unwrap_or(column.to_string());
+                if let Err(e) = is_simple(&column) {
+                    return Err(format!("While reading ORDER BY field, got error: {}", e));
+                }
+                let direction = direction.to_url();
+                parts.push(format!("{}.{}", column, direction));
+            }
             params.push(format!("order={}", parts.join(",")));
         }
         if let Some(limit) = self.limit {
@@ -1338,6 +1367,9 @@ impl Select {
         }
 
         let table = unquote(&self.table).unwrap_or(self.table.to_string());
+        if let Err(e) = is_simple(&table) {
+            return Err(format!("While reading table name, got error: {}", e));
+        }
         if params.len() > 0 {
             Ok(encode(&format!("{}?{}", table, params.join("&"))).to_string())
         } else {
@@ -2432,5 +2464,31 @@ mod tests {
             SerdeValue::String(s) => assert_eq!(s, "foovalue"),
             _ => panic!("'{}' does not match 'foovalue'", fooval),
         };
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_simple_ddl() {
+        let mut select = Select::new("my_table");
+        select.add_select("COUNT(1)");
+        if let Ok(_) = select.to_url() {
+            return;
+        }
+        select.select.clear();
+
+        select.add_filter(Filter::new("Uri$Mayberry", "lt", json!(0)).unwrap());
+        if let Ok(_) = select.to_url() {
+            return;
+        }
+        select.filter.clear();
+
+        select.add_order_by(("Kluge$foo", Direction::Ascending));
+        if let Ok(_) = select.to_url() {
+            return;
+        }
+        select.order_by.clear();
+
+        select.table("My^Flurb");
+        select.to_url().unwrap();
     }
 }
