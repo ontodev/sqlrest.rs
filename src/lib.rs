@@ -1562,7 +1562,7 @@ impl Select {
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
-    ) -> Result<SerdeMap<String, SerdeValue>, String> {
+    ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
         fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
             let mut err_json = SerdeMap::new();
             err_json.insert("status".to_string(), json!(400));
@@ -1571,20 +1571,20 @@ impl Select {
         }
 
         let rows = match self.fetch_rows_as_json(pool, param_map) {
-            Err(e) => return Ok(error_status(&e)),
+            Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
 
         let dbtype = match get_db_type(pool) {
-            Err(e) => return Ok(error_status(&e)),
+            Err(e) => return Err(error_status(&e)),
             Ok(dbtype) => dbtype,
         };
 
         let count = match self.to_sql_count(&dbtype) {
-            Err(e) => return Ok(error_status(&e)),
+            Err(e) => return Err(error_status(&e)),
             Ok(sql) => {
                 match bind_sql(pool, sql, param_map) {
-                    Err(e) => return Ok(error_status(&e)),
+                    Err(e) => return Err(error_status(&e)),
                     Ok((bound_sql, params)) => {
                         // TODO: Wrap the two steps below into its own function
                         let mut query = sqlx_query(&bound_sql);
@@ -1597,9 +1597,9 @@ impl Select {
                         }
                         let row = block_on(query.fetch_one(pool));
                         match row {
-                            Err(e) => return Ok(error_status(&e.to_string())),
+                            Err(e) => return Err(error_status(&e.to_string())),
                             Ok(row) => match row.try_get::<i64, &str>("count") {
-                                Err(e) => return Ok(error_status(&e.to_string())),
+                                Err(e) => return Err(error_status(&e.to_string())),
                                 Ok(count) => count,
                             },
                         }
@@ -2663,11 +2663,15 @@ mod tests {
                 .unwrap();
 
         let select = Select::new("nonexistent_table");
-        let json = select.fetch_as_json(&pool, &HashMap::new()).unwrap();
-        assert_eq!(
-            json!(json).to_string(),
-            "{\"status\":400,\"error\":\"error returned from database: relation \
-                    \\\"nonexistent_table\\\" does not exist\"}",
-        );
+        let expected_json = "{\"status\":400,\"error\":\"error returned from database: relation \
+                             \\\"nonexistent_table\\\" does not exist\"}";
+        match select.fetch_as_json(&pool, &HashMap::new()) {
+            Err(json) => assert_eq!(json!(json).to_string(), expected_json),
+            Ok(json) => panic!(
+                "Got successful response: {} but was expecting the error: {}",
+                json!(json).to_string(),
+                expected_json
+            ),
+        }
     }
 }
