@@ -234,6 +234,19 @@ for pool in vec![sqlite_pool, postgresql_pool] {
         fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
             .unwrap();
 }
+/*
+ * Call fetch_as_json() which returns results suitable for paging as part of a web application.
+ */
+let mut select = Select::new("my_table");
+select.limit(2).offset(1);
+let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
+assert_eq!(
+    format!("{}", json!(rows)),
+    "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
+     [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
+     \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
+     \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
+);
 ```
 ### Parsing Selects from URLs and vice versa.
 #### Select all columns from the table "bar", with no filtering.

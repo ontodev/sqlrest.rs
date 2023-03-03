@@ -80,6 +80,7 @@
 //!     interpolated_sql
 //! );
 //!
+//! # // TODO: Wrap the two steps below into its own function.
 //! let mut test_query = sqlx_query(&bound_sql);
 //! for param in &test_params {
 //!     match param {
@@ -231,6 +232,7 @@
 //! #         SerdeValue::String(s) if s == "bar_val2" => assert!(true),
 //! #         _ => assert!(false, "{} != 'bar_val2'", params[2]),
 //! #     };
+//! #   // TODO: Wrap the two steps below into its own function
 //!     let mut query = sqlx_query(&sql);
 //!     for param in &params {
 //!         match param {
@@ -361,6 +363,20 @@
 //! #         assert_eq!(format!("{}", row), expected_row)
 //! #     }
 //! }
+//! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
+//! /*
+//!  * Call fetch_as_json() which returns results suitable for paging as part of a web application.
+//!  */
+//! let mut select = Select::new("my_table");
+//! select.limit(2).offset(1);
+//! let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
+//! assert_eq!(
+//!     format!("{}", json!(rows)),
+//!     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
+//!      [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
+//!      \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
+//!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
+//! );
 //! ```
 //! ## Parsing Selects from URLs and vice versa.
 //! ### Select all columns from the table "bar", with no filtering.
@@ -596,6 +612,8 @@ use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
 
+pub const LIMIT_MAX: usize = 100;
+pub const LIMIT_DEFAULT: usize = 20;
 pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ ]+$";
 
 lazy_static! {
@@ -1263,7 +1281,7 @@ impl Select {
         count_select.offset = None;
         let inner_sql = count_select.to_sql(dbtype);
         match inner_sql {
-            Ok(inner_sql) => Ok(format!("SELECT COUNT(1) FROM ({}) AS t", inner_sql)),
+            Ok(inner_sql) => Ok(format!("SELECT COUNT(1) AS count FROM ({}) AS t", inner_sql)),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -1420,23 +1438,21 @@ impl Select {
     /// If `as_json` is set to true, the appropriate database function will be used to aggregate the
     /// result set as a single AnyRow with a single field called "row" containing a JSON-formatted
     /// string.
-    fn execute_select(
+    pub fn execute_select(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
         as_json: bool,
     ) -> Result<Vec<AnyRow>, String> {
-        let dbtype = get_db_type(pool);
-        if let Err(e) = dbtype {
-            return Err(e);
-        }
-        let dbtype = dbtype.unwrap();
+        let dbtype = match get_db_type(pool) {
+            Err(e) => return Err(e),
+            Ok(dbtype) => dbtype,
+        };
 
-        let sql = self.to_sql(&dbtype);
-        if let Err(e) = sql {
-            return Err(e);
-        }
-        let sql = sql.unwrap();
+        let sql = match self.to_sql(&dbtype) {
+            Err(e) => return Err(e),
+            Ok(sql) => sql,
+        };
         let sql = if !as_json {
             sql
         } else if dbtype == DbType::Sqlite {
@@ -1454,12 +1470,12 @@ impl Select {
             format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
         };
 
-        let bind_result = bind_sql(pool, &sql, param_map);
-        if let Err(e) = bind_result {
-            return Err(e);
-        }
-        let (sql, param_vec) = bind_result.unwrap();
+        let (sql, param_vec) = match bind_sql(pool, &sql, param_map) {
+            Err(e) => return Err(e),
+            Ok((sql, param_vec)) => (sql, param_vec),
+        };
 
+        // TODO: Wrap the two steps below into its own function
         let mut query = sqlx_query(&sql);
         for param in &param_vec {
             match param {
@@ -1493,23 +1509,91 @@ impl Select {
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
     ) -> Result<Vec<SerdeMap<String, SerdeValue>>, String> {
-        let rows = self.execute_select(pool, param_map, true);
-        if let Err(e) = rows {
-            return Err(e);
-        }
-        let mut rows = rows.unwrap();
+        let mut rows = match self.execute_select(pool, param_map, true) {
+            Err(e) => return Err(e),
+            Ok(rows) => rows,
+        };
 
         if rows.len() != 1 {
             return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
         }
         let row = rows.pop().unwrap();
 
-        let json_row = row.try_get("row");
-        if let Err(e) = json_row {
-            return Err(e.to_string());
-        }
-        let json_row: &str = json_row.unwrap();
+        let json_row = match row.try_get("row") {
+            Err(e) => return Err(e.to_string()),
+            Ok(json_row) => json_row,
+        };
         extract_rows_from_json_str(json_row)
+    }
+
+    /// TODO: Add a docstring here
+    pub fn fetch_as_json(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<SerdeMap<String, SerdeValue>, String> {
+        let rows = match self.fetch_rows_as_json(pool, param_map) {
+            Err(e) => return Err(e),
+            Ok(rows) => rows,
+        };
+
+        let dbtype = match get_db_type(pool) {
+            Err(e) => return Err(e),
+            Ok(dbtype) => dbtype,
+        };
+
+        let count = match self.to_sql_count(&dbtype) {
+            Err(e) => return Err(e),
+            Ok(sql) => {
+                match bind_sql(pool, sql, param_map) {
+                    Err(e) => return Err(e),
+                    Ok((bound_sql, params)) => {
+                        // TODO: Wrap the two steps below into its own function
+                        let mut query = sqlx_query(&bound_sql);
+                        for param in &params {
+                            match param {
+                                SerdeValue::String(s) => query = query.bind(s),
+                                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                                _ => panic!("{} is not a string or a number.", param),
+                            };
+                        }
+                        let row = block_on(query.fetch_one(pool));
+                        match row {
+                            Err(e) => return Err(e.to_string()),
+                            Ok(row) => match row.try_get::<i64, &str>("count") {
+                                Err(e) => return Err(e.to_string()),
+                                Ok(count) => count,
+                            },
+                        }
+                    }
+                }
+            }
+        };
+
+        let mut json_object = SerdeMap::new();
+        json_object.insert("status".to_string(), json!(200));
+        json_object.insert("unit".to_string(), json!("items"));
+        let start = match self.offset {
+            None => 0,
+            Some(i) => i,
+        };
+        json_object.insert("start".to_string(), json!(start));
+        json_object.insert(
+            "end".to_string(),
+            match self.limit {
+                None => json!(start + LIMIT_DEFAULT),
+                Some(l) => {
+                    if l > LIMIT_MAX {
+                        json!(start + LIMIT_MAX)
+                    } else {
+                        json!(start + l)
+                    }
+                }
+            },
+        );
+        json_object.insert("count".to_string(), json!(count));
+        json_object.insert("rows".to_string(), rows.into());
+        Ok(json_object)
     }
 }
 
@@ -1832,34 +1916,37 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
             let child_count = n.named_child_count();
             let mut position = 0;
             while position < child_count {
-                let named_child = n.named_child(position);
-                if let None = named_child {
-                    *query_result = Err(format!(
-                        "Unable to extract named child #{} from Node: {:?}",
-                        position, n
-                    ));
-                    return;
-                }
-                let named_child = named_child.unwrap();
+                let named_child = match n.named_child(position) {
+                    None => {
+                        *query_result = Err(format!(
+                            "Unable to extract named child #{} from Node: {:?}",
+                            position, n
+                        ));
+                        return;
+                    }
+                    Some(named_child) => named_child,
+                };
 
                 let column = get_from_raw(&named_child, raw);
-                let column = decode(&column);
-                if let Err(e) = column {
-                    *query_result = Err(e.to_string());
-                    return;
-                }
-                let column = column.unwrap();
+                let column = match decode(&column) {
+                    Err(e) => {
+                        *query_result = Err(e.to_string());
+                        return;
+                    }
+                    Ok(column) => column,
+                };
 
                 position = position + 1;
-                let named_child = n.named_child(position);
-                if let None = named_child {
-                    *query_result = Err(format!(
-                        "Unable to extract named child #{} from Node: {:?}",
-                        position, n
-                    ));
-                    return;
-                }
-                let named_child = named_child.unwrap();
+                let named_child = match n.named_child(position) {
+                    None => {
+                        *query_result = Err(format!(
+                            "Unable to extract named child #{} from Node: {:?}",
+                            position, n
+                        ));
+                        return;
+                    }
+                    Some(named_child) => named_child,
+                };
 
                 if position < child_count && named_child.kind().eq("ordering") {
                     let ordering_string = get_from_raw(&named_child, raw);
@@ -1978,6 +2065,7 @@ pub fn fetch_rows_from_selects(
         Err(e) => return Err(e),
         Ok((sql, params)) => (sql, params),
     };
+    // TODO: Wrap the two steps below into its own function
     let mut query = sqlx_query(&sql);
     for param in params {
         match param {
@@ -2058,6 +2146,7 @@ pub fn fetch_rows_as_json_from_selects(
         Err(e) => return Err(e),
         Ok((sql, params)) => (sql, params),
     };
+    // TODO: Wrap the two steps below into its own function.
     let mut query = sqlx_query(&sql);
     for param in params {
         match param {
@@ -2120,6 +2209,7 @@ pub fn bind_sql<'a, S: Into<String>>(
             final_sql.push_str(this_match);
         } else {
             // Remove the opening and closing braces from the placeholder, `{key}`:
+            // TODO: Do not use unwrap() here.
             let key = this_match.strip_prefix("{").and_then(|s| s.strip_suffix("}")).unwrap();
             match param_map.get(key) {
                 None => return Err(format!("Key '{}' not found in parameter map", key)),
@@ -2203,6 +2293,7 @@ pub fn interpolate_sql<S: Into<String>>(
     let mut saved_start = 0;
 
     let quotes = r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")"#;
+    // TODO: Do not use unwrap() here.
     let rx;
     if let Some(s) = placeholder_str {
         rx = Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s.into())).unwrap();
@@ -2389,14 +2480,14 @@ mod tests {
                 .unwrap();
 
         for pool in &vec![sqlite_pool, postgresql_pool] {
-            let drop = r#"DROP TABLE IF EXISTS "my_table""#;
-            let create = r#"CREATE TABLE "my_table" (
+            let drop = r#"DROP TABLE IF EXISTS "my_table_with_reals""#;
+            let create = r#"CREATE TABLE "my_table_with_reals" (
                           "row_number" BIGINT,
                           "column_1" TEXT,
                           "column_2" TEXT,
                           "column_3" REAL
                         )"#;
-            let insert = r#"INSERT INTO "my_table" VALUES
+            let insert = r#"INSERT INTO "my_table_with_reals" VALUES
                         (1, 'one', 'eins', 1.1),
                         (2, 'two', 'zwei', 2.2),
                         (3, 'three', 'drei', 3.3)"#;
@@ -2406,7 +2497,7 @@ mod tests {
                 block_on(query.execute(pool)).unwrap();
             }
 
-            let mut select = Select::new("my_table");
+            let mut select = Select::new("my_table_with_reals");
             select
                 .select_all(pool)
                 .unwrap()
@@ -2435,14 +2526,14 @@ mod tests {
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
                 .unwrap();
 
-        let drop = r#"DROP TABLE IF EXISTS "my_table""#;
-        let create = r#"CREATE TABLE "my_table" (
+        let drop = r#"DROP TABLE IF EXISTS "my_table_with_json""#;
+        let create = r#"CREATE TABLE "my_table_with_json" (
                           "row_number" BIGINT,
                           "column_1" TEXT,
                           "column_2" TEXT,
                           "column_3" JSON
                         )"#;
-        let insert = r#"INSERT INTO "my_table" VALUES
+        let insert = r#"INSERT INTO "my_table_with_json" VALUES
                         (1, 'one', 'eins', '1'::JSON),
                         (2, 'two', 'zwei', '"dos"'::JSON),
                         (3, 'three', 'drei', '{"fookey": "foovalue"}'::JSON)"#;
@@ -2452,7 +2543,7 @@ mod tests {
             block_on(query.execute(&pool)).unwrap();
         }
 
-        let mut select = Select::new("my_table");
+        let mut select = Select::new("my_table_with_json");
         select
             .select_all(&pool)
             .unwrap()
@@ -2522,6 +2613,6 @@ mod tests {
     fn test_count() {
         let select = Select::new("my_table");
         let sql = select.to_sql_count(&DbType::Sqlite).unwrap();
-        assert_eq!(sql, "SELECT COUNT(1) FROM (SELECT * FROM my_table) AS t");
+        assert_eq!(sql, "SELECT COUNT(1) AS count FROM (SELECT * FROM my_table) AS t");
     }
 }
