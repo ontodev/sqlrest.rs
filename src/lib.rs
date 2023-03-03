@@ -1273,7 +1273,10 @@ impl Select {
         self.to_sql(&DbType::Sqlite)
     }
 
-    /// TODO: Add a docstring here.
+    /// Given a database type, convert the given Select struct to an SQL statement that will
+    /// return the number of rows in the database that satisfy the criteria (filters, etc.)
+    /// associated with the Select struct, using the syntax appropriate for the kind of database
+    /// specified.
     pub fn to_sql_count(&self, dbtype: &DbType) -> Result<String, String> {
         let mut count_select = self.clone();
         count_select.order_by.clear();
@@ -1286,12 +1289,18 @@ impl Select {
         }
     }
 
-    /// TODO: Add a docstring here.
+    /// Convert the given Select struct to an SQL statement, using Sqlite syntax, that will return
+    /// the number of rows in the database that satisfy the criteria (filters, etc.) associated with
+    /// the Select struct. This is a convenience method implemented as a wrapper aruond a call to
+    /// to_sql_count(&DBType::Sqlite).
     pub fn to_sqlite_count(&self) -> Result<String, String> {
         self.to_sql_count(&DbType::Sqlite)
     }
 
-    /// TODO: Add a docstring here.
+    /// Convert the given Select struct to an SQL statement, using Postgres syntax, that will return
+    /// the number of rows in the database that satisfy the criteria (filters, etc.) associated with
+    /// the Select struct. This is a convenience method implemented as a wrapper aruond a call to
+    /// to_sql_count(&DBType::Postgres).
     pub fn to_postgres_count(&self) -> Result<String, String> {
         self.to_sql_count(&DbType::Postgres)
     }
@@ -1526,7 +1535,20 @@ impl Select {
         extract_rows_from_json_str(json_row)
     }
 
-    /// TODO: Add a docstring here
+    /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
+    /// execute the resulting query against the database, and return the result as a JSON object
+    /// with the following fields:
+    /// {
+    ///   "status": <HTTP status code>,
+    ///   "unit":   <What is referred to by start, end, and count>,
+    ///   "start":  <corresponds to self.offset, or 0 if undefined>,
+    ///   "end":    <corresponds to start + self.limit, where limit defaults to [[LIMIT_DEFAULT]]
+    ///              and cannot be greater than [[LIMIT_MAX]]>,
+    ///   "count":  <the total number of rows matching the query, irrespective of self.limit and
+    ///              self.offset>,
+    ///   "rows":   <the actual row records returned by the query given self.limit and self.offset,
+    ///              represented as a JSON array of JSON objects>
+    /// }
     pub fn fetch_as_json(
         &self,
         pool: &AnyPool,
