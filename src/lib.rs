@@ -1533,6 +1533,11 @@ impl Select {
         extract_rows_from_json_str(json_row)
     }
 
+    /// Maximum allowable value of [Select::limit] when querying from the web.
+    pub const WEB_LIMIT_MAX: usize = 100;
+    /// Default value to use for the limit parameter when querying from the web.
+    pub const WEB_LIMIT_DEFAULT: usize = 20;
+
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the result as a JSON object
     /// with the following fields:
@@ -1540,9 +1545,11 @@ impl Select {
     ///   * `unit`:   The kind of thing referred to by `start`, `end`, and `count`
     ///   * `start`:  corresponds to [self.offset](Select::offset), or 0 if undefined
     ///   * `end`:    corresponds to `start` + [self.limit](Select::limit), where
-    ///               [self.limit](Select::limit) defaults to 20 if unspecified
-    ///               and cannot be greater than 100. (If [self.limit](Select::limit) >
-    ///               100 then the latter will be used instead.)
+    ///               [self.limit](Select::limit) defaults to
+    ///               [WEB_LIMIT_DEFAULT](Self::WEB_LIMIT_DEFAULT) if unspecified, and cannot be
+    ///               greater than [WEB_LIMIT_MAX](Self::WEB_LIMIT_MAX). (If
+    ///               [self.limit](Select::limit) > [WEB_LIMIT_MAX](Self::WEB_LIMIT_MAX) then the
+    ///               latter will be used instead.)
     ///   * `count`:  the total number of rows matching the query, irrespective of the values of
     ///               [self.limit](Select::limit) and [self.offset](Select::offset)
     ///   * `rows`:   the actual row records returned by the query given [self.limit](Select::limit)
@@ -1556,9 +1563,6 @@ impl Select {
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
     ) -> Result<SerdeMap<String, SerdeValue>, String> {
-        const LIMIT_MAX: usize = 100;
-        const LIMIT_DEFAULT: usize = 20;
-
         fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
             let mut err_json = SerdeMap::new();
             err_json.insert("status".to_string(), json!(400));
@@ -1615,10 +1619,10 @@ impl Select {
         json_object.insert(
             "end".to_string(),
             match self.limit {
-                None => json!(start + LIMIT_DEFAULT),
+                None => json!(start + Self::WEB_LIMIT_DEFAULT),
                 Some(l) => {
-                    if l > LIMIT_MAX {
-                        json!(start + LIMIT_MAX)
+                    if l > Self::WEB_LIMIT_MAX {
+                        json!(start + Self::WEB_LIMIT_MAX)
                     } else {
                         json!(start + l)
                     }
