@@ -612,8 +612,6 @@ use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
 
-pub const LIMIT_MAX: usize = 100;
-pub const LIMIT_DEFAULT: usize = 20;
 pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ ]+$";
 
 lazy_static! {
@@ -1538,37 +1536,51 @@ impl Select {
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the result as a JSON object
     /// with the following fields:
-    /// {
-    ///   "status": <HTTP status code>,
-    ///   "unit":   <What is referred to by start, end, and count>,
-    ///   "start":  <corresponds to self.offset, or 0 if undefined>,
-    ///   "end":    <corresponds to start + self.limit, where limit defaults to [[LIMIT_DEFAULT]]
-    ///              and cannot be greater than [[LIMIT_MAX]]>,
-    ///   "count":  <the total number of rows matching the query, irrespective of self.limit and
-    ///              self.offset>,
-    ///   "rows":   <the actual row records returned by the query given self.limit and self.offset,
-    ///              represented as a JSON array of JSON objects>
-    /// }
+    ///   * `status`: HTTP status code
+    ///   * `unit`:   The kind of thing referred to by `start`, `end`, and `count`
+    ///   * `start`:  corresponds to [self.offset](Select::offset), or 0 if undefined
+    ///   * `end`:    corresponds to `start` + [self.limit](Select::limit), where
+    ///               [self.limit](Select::limit) defaults to 20 if unspecified
+    ///               and cannot be greater than 100. (If [self.limit](Select::limit) >
+    ///               100 then the latter will be used instead.)
+    ///   * `count`:  the total number of rows matching the query, irrespective of the values of
+    ///               [self.limit](Select::limit) and [self.offset](Select::offset)
+    ///   * `rows`:   the actual row records returned by the query given [self.limit](Select::limit)
+    ///               and [self.offset](Select::offset), represented as a JSON array of JSON objects
+    ///
+    /// In case of an error a JSON object in the following format will be returned:
+    ///   * `status`: HTTP status code
+    ///   * `error`: The error message.
     pub fn fetch_as_json(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
     ) -> Result<SerdeMap<String, SerdeValue>, String> {
+        const LIMIT_MAX: usize = 100;
+        const LIMIT_DEFAULT: usize = 20;
+
+        fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
+            let mut err_json = SerdeMap::new();
+            err_json.insert("status".to_string(), json!(400));
+            err_json.insert("error".to_string(), err.into());
+            err_json
+        }
+
         let rows = match self.fetch_rows_as_json(pool, param_map) {
-            Err(e) => return Err(e),
+            Err(e) => return Ok(error_status(&e)),
             Ok(rows) => rows,
         };
 
         let dbtype = match get_db_type(pool) {
-            Err(e) => return Err(e),
+            Err(e) => return Ok(error_status(&e)),
             Ok(dbtype) => dbtype,
         };
 
         let count = match self.to_sql_count(&dbtype) {
-            Err(e) => return Err(e),
+            Err(e) => return Ok(error_status(&e)),
             Ok(sql) => {
                 match bind_sql(pool, sql, param_map) {
-                    Err(e) => return Err(e),
+                    Err(e) => return Ok(error_status(&e)),
                     Ok((bound_sql, params)) => {
                         // TODO: Wrap the two steps below into its own function
                         let mut query = sqlx_query(&bound_sql);
@@ -1581,9 +1593,9 @@ impl Select {
                         }
                         let row = block_on(query.fetch_one(pool));
                         match row {
-                            Err(e) => return Err(e.to_string()),
+                            Err(e) => return Ok(error_status(&e.to_string())),
                             Ok(row) => match row.try_get::<i64, &str>("count") {
-                                Err(e) => return Err(e.to_string()),
+                                Err(e) => return Ok(error_status(&e.to_string())),
                                 Ok(count) => count,
                             },
                         }
@@ -2636,5 +2648,22 @@ mod tests {
         let select = Select::new("my_table");
         let sql = select.to_sql_count(&DbType::Sqlite).unwrap();
         assert_eq!(sql, "SELECT COUNT(1) AS count FROM (SELECT * FROM my_table) AS t");
+    }
+
+    #[test]
+    fn test_json_fetch_error() {
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+                .unwrap();
+
+        let select = Select::new("nonexistent_table");
+        let json = select.fetch_as_json(&pool, &HashMap::new()).unwrap();
+        assert_eq!(
+            json!(json).to_string(),
+            "{\"status\":400,\"error\":\"error returned from database: relation \
+                    \\\"nonexistent_table\\\" does not exist\"}",
+        );
     }
 }
