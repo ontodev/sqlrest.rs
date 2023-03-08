@@ -384,8 +384,8 @@
 //!     format!("{}", json!(rows)),
 //!     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
 //!      [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
-//!      \"version IRI\":\"v2\",\"count\":4},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
-//!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\",\"count\":4}]}"
+//!      \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
+//!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
 //! );
 //! ```
 //! ## Parsing Selects from URLs and vice versa.
@@ -1719,7 +1719,16 @@ impl Select {
             },
         );
         json_object.insert("count".to_string(), json!(count));
-        json_object.insert("rows".to_string(), rows.into());
+        json_object.insert("rows".to_string(), {
+            let mut pruned_rows = vec![];
+            for row in &rows {
+                let mut row = row.clone();
+                row.remove("count");
+                pruned_rows.push(row);
+            }
+            pruned_rows.into()
+        });
+
         Ok(json_object)
     }
 
