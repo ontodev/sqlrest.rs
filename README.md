@@ -152,6 +152,16 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
 }
 
 /*
+ * Use a window function:
+ */
+
+let mut select = Select::new("my_table");
+select.window("COUNT", "row_number", None);
+let expected_sql = "SELECT *, COUNT(row_number) OVER() count_row_number FROM my_table";
+assert_eq!(select.to_sqlite().unwrap(), expected_sql);
+assert_eq!(select.to_postgres().unwrap(), expected_sql);
+
+/*
  * Generate the SQL for a simple combined query.
  */
 let mut cte = Select::new("my_table");
@@ -235,17 +245,17 @@ for pool in vec![sqlite_pool, postgresql_pool] {
             .unwrap();
 }
 /*
- * Call fetch_as_json() which returns results suitable for paging as part of a web application.
+ * Call fetch_as_json_using_window() which returns results suitable for paging as part of a web application.
  */
 let mut select = Select::new("my_table");
 select.limit(2).offset(1);
-let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
+let rows = select.fetch_as_json_using_window(&postgresql_pool, &HashMap::new()).unwrap();
 assert_eq!(
     format!("{}", json!(rows)),
     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
      [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
-     \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
-     \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
+     \"version IRI\":\"v2\",\"count\":4},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
+     \"ontology IRI\":\"o3\",\"version IRI\":\"v3\",\"count\":4}]}"
 );
 ```
 ### Parsing Selects from URLs and vice versa.

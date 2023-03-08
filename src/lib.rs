@@ -245,6 +245,16 @@
 //! }
 //!
 //! /*
+//!  * Use a window function:
+//!  */
+//!
+//! let mut select = Select::new("my_table");
+//! select.window("COUNT", "row_number", None);
+//! let expected_sql = "SELECT *, COUNT(row_number) OVER() count_row_number FROM my_table";
+//! assert_eq!(select.to_sqlite().unwrap(), expected_sql);
+//! assert_eq!(select.to_postgres().unwrap(), expected_sql);
+//!
+//! /*
 //!  * Generate the SQL for a simple combined query.
 //!  */
 //! let mut cte = Select::new("my_table");
@@ -365,17 +375,17 @@
 //! }
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! /*
-//!  * Call fetch_as_json() which returns results suitable for paging as part of a web application.
+//!  * Call fetch_as_json_using_window() which returns results suitable for paging as part of a web application.
 //!  */
 //! let mut select = Select::new("my_table");
 //! select.limit(2).offset(1);
-//! let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
+//! let rows = select.fetch_as_json_using_window(&postgresql_pool, &HashMap::new()).unwrap();
 //! assert_eq!(
 //!     format!("{}", json!(rows)),
 //!     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
 //!      [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
-//!      \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
-//!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
+//!      \"version IRI\":\"v2\",\"count\":4},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
+//!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\",\"count\":4}]}"
 //! );
 //! ```
 //! ## Parsing Selects from URLs and vice versa.
@@ -1011,12 +1021,54 @@ pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, 
     Ok(parts.join(joiner))
 }
 
+/// Representation of a window function in an SQL query. If Alias is None it defaults to
+/// '<function_name>_<column_name>'.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Window {
+    pub function: String,
+    pub column: String,
+    pub alias: Option<String>,
+}
+
+impl Window {
+    /// Given a function name, a column name, and optionally an alias, create a new Window struct.
+    pub fn new<S: Into<String>>(function: S, column: S, alias: Option<S>) -> Window {
+        match alias {
+            None => Window { function: function.into(), column: column.into(), alias: None },
+            Some(alias) => Window {
+                function: function.into(),
+                column: column.into(),
+                alias: Some(alias.into()),
+            },
+        }
+    }
+
+    /// Clone the given window.
+    pub fn clone(window: &Window) -> Window {
+        Window { ..window.clone() }
+    }
+
+    /// Convert the given window into an SQL string suitable to be used in a SELECT clause.
+    pub fn to_sql(&self) -> String {
+        format!(
+            "{}({}) OVER() {}",
+            self.function,
+            self.column,
+            match &self.alias {
+                None => format!("{}_{}", self.function.to_lowercase(), self.column),
+                Some(alias) => alias.to_string(),
+            }
+        )
+    }
+}
+
 /// A structure to represent an SQL select statement.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     pub table: String,
     pub select: Vec<(String, Option<String>)>,
     pub filter: Vec<Filter>,
+    pub window: Option<Window>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
     pub order_by: Vec<(String, Direction)>,
@@ -1089,6 +1141,18 @@ impl Select {
     /// Given a filter, add it to the vector, `self.filter`.
     pub fn add_filter(&mut self, filter: Filter) -> &mut Select {
         self.filter.push(filter);
+        self
+    }
+
+    /// Given a function name, column name, and optionally an alias, create a new Window struct
+    /// and associate it with the Select struct.
+    pub fn window<S: Into<String>>(
+        &mut self,
+        function: S,
+        column: S,
+        alias: Option<S>,
+    ) -> &mut Select {
+        self.window = Some(Window::new(function, column, alias));
         self
     }
 
@@ -1204,7 +1268,7 @@ impl Select {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
 
-        let select_clause;
+        let mut select_clause;
         if self.select.is_empty() {
             select_clause = String::from("*");
         } else {
@@ -1221,6 +1285,9 @@ impl Select {
             }
             select_clause = select_columns.join(", ");
         }
+        if let Some(window) = &self.window {
+            select_clause.push_str(&format!(", {}", window.to_sql()));
+        };
 
         let table = quote_if_whitespace(&self.table);
         let mut sql = format!("SELECT {} FROM {}", select_clause, table);
@@ -1317,6 +1384,9 @@ impl Select {
         if !self.group_by.is_empty() || !self.having.is_empty() {
             return Err("GROUP BY / HAVING clauses are not supported in to_url()".to_string());
         }
+
+        // TODO: self.window is silently ignored in this function. Should we be doing somthing
+        // else instead?
 
         // Helper function to surround any 'special' strings with double-quotes. These include
         // strings composed entirely of numeric symbols, as well as strings containing one of the
@@ -1533,10 +1603,125 @@ impl Select {
         extract_rows_from_json_str(json_row)
     }
 
+    /// Given a database connection pool and a parameter map, bind this select to the parameter map,
+    /// and then fetch the number of rows that would be returned by the query.
+    pub fn get_row_count(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<usize, String> {
+        let dbtype = match get_db_type(pool) {
+            Err(e) => return Err(e),
+            Ok(dbtype) => dbtype,
+        };
+        match self.to_sql_count(&dbtype) {
+            Err(e) => return Err(e),
+            Ok(sql) => {
+                match bind_sql(pool, sql, param_map) {
+                    Err(e) => return Err(e),
+                    Ok((bound_sql, params)) => {
+                        // TODO: Wrap the two steps below into its own function
+                        let mut query = sqlx_query(&bound_sql);
+                        for param in &params {
+                            match param {
+                                SerdeValue::String(s) => query = query.bind(s),
+                                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+                                _ => panic!("{} is not a string or a number.", param),
+                            };
+                        }
+                        let row = block_on(query.fetch_one(pool));
+                        match row {
+                            Err(e) => return Err(e.to_string()),
+                            Ok(row) => match row.try_get::<i64, &str>("count") {
+                                Err(e) => return Err(e.to_string()),
+                                Ok(count) => Ok(count as usize),
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
     /// Maximum allowable value of [Select::limit] when querying from the web.
     pub const WEB_LIMIT_MAX: usize = 100;
     /// Default value to use for the limit parameter when querying from the web.
     pub const WEB_LIMIT_DEFAULT: usize = 20;
+
+    /// TODO: Add a docstring here. Note that we should keep either this function or the
+    /// "two queries" version but not both.
+    pub fn fetch_as_json_using_window(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+    ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
+        fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
+            let mut err_json = SerdeMap::new();
+            err_json.insert("status".to_string(), json!(400));
+            err_json.insert("error".to_string(), err.into());
+            err_json
+        }
+
+        let mut window_select = self.clone();
+        window_select.window("COUNT", "1", Some("count"));
+
+        let rows = match window_select.fetch_rows_as_json(pool, param_map) {
+            Err(e) => return Err(error_status(&e)),
+            Ok(rows) => rows,
+        };
+
+        let count = {
+            if rows.len() < 1 {
+                // If no rows are returned it could be because the offset is too high. In that case
+                // to get the correct row count we need to use an explicit query rather than a
+                // window function:
+                match self.get_row_count(pool, param_map) {
+                    Err(e) => return Err(error_status(&e)),
+                    Ok(c) => c,
+                }
+            } else {
+                let first_row = &rows[0];
+                match first_row.get("count") {
+                    None => {
+                        return Err(error_status(&format!(
+                            "No field called 'count' found in row: {:?}",
+                            first_row
+                        )))
+                    }
+                    Some(c) => match c.as_i64() {
+                        Some(n) => n as usize,
+                        None => {
+                            return Err(error_status(&format!("Could not parse '{}' as usize", c)))
+                        }
+                    },
+                }
+            }
+        };
+
+        let mut json_object = SerdeMap::new();
+        json_object.insert("status".to_string(), json!(200));
+        json_object.insert("unit".to_string(), json!("items"));
+        let start = match window_select.offset {
+            None => 0,
+            Some(i) => i,
+        };
+        json_object.insert("start".to_string(), json!(start));
+        json_object.insert(
+            "end".to_string(),
+            match window_select.limit {
+                None => json!(start + Self::WEB_LIMIT_DEFAULT),
+                Some(l) => {
+                    if l > Self::WEB_LIMIT_MAX {
+                        json!(start + Self::WEB_LIMIT_MAX)
+                    } else {
+                        json!(start + l)
+                    }
+                }
+            },
+        );
+        json_object.insert("count".to_string(), json!(count));
+        json_object.insert("rows".to_string(), rows.into());
+        Ok(json_object)
+    }
 
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the result as a JSON object
@@ -1558,7 +1743,7 @@ impl Select {
     /// In case of an error a JSON object in the following format will be returned:
     ///   * `status`: HTTP status code
     ///   * `error`: The error message.
-    pub fn fetch_as_json(
+    pub fn fetch_as_json_using_two_queries(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
@@ -1575,37 +1760,9 @@ impl Select {
             Ok(rows) => rows,
         };
 
-        let dbtype = match get_db_type(pool) {
+        let count = match self.get_row_count(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
-            Ok(dbtype) => dbtype,
-        };
-
-        let count = match self.to_sql_count(&dbtype) {
-            Err(e) => return Err(error_status(&e)),
-            Ok(sql) => {
-                match bind_sql(pool, sql, param_map) {
-                    Err(e) => return Err(error_status(&e)),
-                    Ok((bound_sql, params)) => {
-                        // TODO: Wrap the two steps below into its own function
-                        let mut query = sqlx_query(&bound_sql);
-                        for param in &params {
-                            match param {
-                                SerdeValue::String(s) => query = query.bind(s),
-                                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                                _ => panic!("{} is not a string or a number.", param),
-                            };
-                        }
-                        let row = block_on(query.fetch_one(pool));
-                        match row {
-                            Err(e) => return Err(error_status(&e.to_string())),
-                            Ok(row) => match row.try_get::<i64, &str>("count") {
-                                Err(e) => return Err(error_status(&e.to_string())),
-                                Ok(count) => count,
-                            },
-                        }
-                    }
-                }
-            }
+            Ok(count) => count,
         };
 
         let mut json_object = SerdeMap::new();
@@ -2665,7 +2822,7 @@ mod tests {
         let select = Select::new("nonexistent_table");
         let expected_json = "{\"status\":400,\"error\":\"error returned from database: relation \
                              \\\"nonexistent_table\\\" does not exist\"}";
-        match select.fetch_as_json(&pool, &HashMap::new()) {
+        match select.fetch_as_json_using_window(&pool, &HashMap::new()) {
             Err(json) => assert_eq!(json!(json).to_string(), expected_json),
             Ok(json) => panic!(
                 "Got successful response: {} but was expecting the error: {}",
