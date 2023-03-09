@@ -2541,10 +2541,10 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use sqlx::{
-        any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
+        any::{AnyConnectOptions, AnyPoolOptions},
         query as sqlx_query, Row, ValueRef,
     };
-    use std::{char, collections::HashMap, str::FromStr, time::Instant};
+    use std::{collections::HashMap, str::FromStr};
 
     #[test]
     #[serial]
