@@ -1,8 +1,11 @@
 mod perf_test;
 
-use crate::perf_test::{perf_test_postgresql, perf_test_sqlite};
+use crate::perf_test::time_json_fetch;
 
 use argparse::{ArgumentParser, StoreTrue};
+use futures::executor::block_on;
+use sqlx::any::{AnyConnectOptions, AnyPoolOptions};
+use std::{str::FromStr};
 
 fn main() {
     let mut perf_test = false;
@@ -22,8 +25,19 @@ fn main() {
     }
 
     if perf_test {
-        perf_test_postgresql();
-        perf_test_sqlite();
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let postgresql_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+            .unwrap();
+        let sq_connection_options =
+            AnyConnectOptions::from_str("sqlite://test.db?mode=rwc").unwrap();
+        let sqlite_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+            .unwrap();
+
+        time_json_fetch(&postgresql_pool);
+        time_json_fetch(&sqlite_pool);
     }
 
 }

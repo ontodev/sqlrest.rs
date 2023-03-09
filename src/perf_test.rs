@@ -2,13 +2,12 @@ use ontodev_sqlrest::{Filter, Select};
 
 use futures::executor::block_on;
 use serde_json::json;
-use sqlx::{
-    any::{AnyConnectOptions, AnyPool, AnyPoolOptions},
-    query as sqlx_query, Row,
-};
-use std::{char, collections::HashMap, str::FromStr, time::Instant};
+use sqlx::{any::AnyPool, query as sqlx_query, Row};
+use std::{char, collections::HashMap, time::Instant};
 
-pub fn perf_test_for_db(pool: &AnyPool) {
+pub fn time_json_fetch(pool: &AnyPool) {
+    println!("Checking performance of fetch_rows_as_json().");
+    println!("=============================================");
     let drop = r#"DROP TABLE IF EXISTS "my_table""#;
     let create = r#"CREATE TABLE "my_table" (
                           "row_number" BIGINT,
@@ -92,27 +91,6 @@ pub fn perf_test_for_db(pool: &AnyPool) {
         println!("Elapsed time after iterating: {:.2?}", start.elapsed());
         println!("----------");
     }
-}
-
-/// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
-/// functions on PostgreSQL. Note that to view the output of the test you must
-/// use the 'nocapture' option: `cargo test -- --nocapture`
-pub fn perf_test_postgresql() {
-    let pg_connection_options =
-        AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-    let postgresql_pool =
-        block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-            .unwrap();
-    perf_test_for_db(&postgresql_pool);
-}
-
-/// Runs a performance test of the Select::fetch_rows() and Select::fetch_rows_as_json()
-/// functions on SQLite. Note that to view the output of the test you must
-/// use the 'nocapture' option: `cargo test -- --nocapture`
-pub fn perf_test_sqlite() {
-    let sq_connection_options = AnyConnectOptions::from_str("sqlite://test.db?mode=rwc").unwrap();
-    let sqlite_pool =
-        block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
-            .unwrap();
-    perf_test_for_db(&sqlite_pool);
+    println!("Done checking performance of fetch_rows_as_json().");
+    println!("==================================================");
 }
