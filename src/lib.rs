@@ -1541,6 +1541,14 @@ impl Select {
                 };
                 json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
             }
+            // Add a key for the window function alias if one is associated with this query.
+            if let Some(window) = &self.window {
+                let alias = match &window.alias {
+                    None => format!("{}_{}", window.function.to_lowercase(), window.column),
+                    Some(alias) => alias.to_string(),
+                };
+                json_keys.push(format!(r#"'{}', "{}""#, alias, alias));
+            }
             let json_select = json_keys.join(", ");
             format!("SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})", json_select, sql)
         } else {
