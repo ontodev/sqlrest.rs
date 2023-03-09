@@ -39,11 +39,11 @@ fn main() {
     let pg_connection_options =
         AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
     let postgresql_pool =
-        block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+        block_on(AnyPoolOptions::new().max_connections(1).connect_with(pg_connection_options))
             .unwrap();
     let sq_connection_options = AnyConnectOptions::from_str("sqlite://test.db?mode=rwc").unwrap();
     let sqlite_pool =
-        block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+        block_on(AnyPoolOptions::new().max_connections(1).connect_with(sq_connection_options))
             .unwrap();
 
     if json_fetch {
