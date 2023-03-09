@@ -5,9 +5,10 @@ use serde_json::json;
 use sqlx::{any::AnyPool, query as sqlx_query, Row};
 use std::{char, collections::HashMap, time::Instant};
 
-pub fn time_json_fetch(pool: &AnyPool) {
-    println!("Checking performance of fetch_rows_as_json().");
-    println!("=============================================");
+pub const NUM_ROWS: isize = 250000;
+pub const NUM_COLUMNS: isize = 5;
+
+pub fn get_setup_sql() -> (String, String, String) {
     let drop = r#"DROP TABLE IF EXISTS "my_table""#;
     let create = r#"CREATE TABLE "my_table" (
                           "row_number" BIGINT,
@@ -38,25 +39,67 @@ pub fn time_json_fetch(pool: &AnyPool) {
     }
 
     let mut insert = String::from(r#"INSERT INTO "my_table" VALUES "#);
-    let num_rows = 250000;
-    let num_columns = 5;
-    for i in 1..num_rows {
+    for i in 1..NUM_ROWS {
         insert.push_str(&format!("({}, ", i));
         let mut cell_ids = vec![];
-        for j in 1..num_columns {
+        for j in 1..NUM_COLUMNS {
             let cell_id = format!("'{}{}'", col_to_a1(j), i);
             cell_ids.push(cell_id);
         }
         insert.push_str(&format!("{})", cell_ids.join(", ")));
-        if i != (num_rows - 1) {
+        if i != (NUM_ROWS - 1) {
             insert.push_str(",");
         }
     }
 
+    (drop.to_string(), create.to_string(), insert.to_string())
+}
+
+pub fn time_window_select(pool: &AnyPool) {
+    println!("Checking performance of fetch_as_json_using_window().");
+    println!("=====================================================");
+    let (drop, create, insert) = get_setup_sql();
     let num_iterations = 5;
     for i in 1..(num_iterations + 1) {
         println!("Running performance test #{} of {} for {:?}", i, num_iterations, pool.any_kind());
-        for sql in &vec![drop, create, &insert] {
+        for sql in vec![&drop, &create, &insert] {
+            let query = sqlx_query(sql);
+            block_on(query.execute(pool)).unwrap();
+        }
+
+        // Run the VACUUM command to clear the cache:
+        let query = sqlx_query("VACUUM");
+        block_on(query.execute(pool)).unwrap();
+
+        // Time the query:
+        let select = Select::new("my_table");
+        let start = Instant::now();
+        let _rows = select.fetch_as_json_using_window(pool, &HashMap::new()).unwrap();
+        println!("Elapsed time for window fetch: {:.2?}", start.elapsed());
+
+        // Run the VACUUM command to clear the cache:
+        let query = sqlx_query("VACUUM");
+        block_on(query.execute(pool)).unwrap();
+
+        // Time the query:
+        let start = Instant::now();
+        let _rows = select.fetch_as_json_using_two_queries(pool, &HashMap::new()).unwrap();
+        println!("Elapsed time for two query fetch: {:.2?}", start.elapsed());
+    }
+
+    println!("Done checking performance of fetch_as_json_using_window().");
+    println!("==========================================================");
+}
+
+pub fn time_json_fetch(pool: &AnyPool) {
+    println!("Checking performance of fetch_rows_as_json().");
+    println!("=============================================");
+
+    let (drop, create, insert) = get_setup_sql();
+    let num_iterations = 5;
+    for i in 1..(num_iterations + 1) {
+        println!("Running performance test #{} of {} for {:?}", i, num_iterations, pool.any_kind());
+        for sql in vec![&drop, &create, &insert] {
             let query = sqlx_query(sql);
             block_on(query.execute(pool)).unwrap();
         }
@@ -64,7 +107,7 @@ pub fn time_json_fetch(pool: &AnyPool) {
         let mut select = Select::new("my_table");
         select
             .select(vec!["row_number", "prefix", "base", "\"ontology IRI\"", "\"version IRI\""])
-            .filter(vec![Filter::new("row_number", "lt", json!(num_rows / 2)).unwrap()]);
+            .filter(vec![Filter::new("row_number", "lt", json!(NUM_ROWS / 2)).unwrap()]);
 
         // Run the VACUUM command to clear the cache:
         let query = sqlx_query("VACUUM");

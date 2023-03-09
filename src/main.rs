@@ -1,6 +1,6 @@
 mod perf_test;
 
-use crate::perf_test::time_json_fetch;
+use crate::perf_test::{time_json_fetch, time_window_select};
 
 use argparse::{ArgumentParser, StoreTrue};
 use futures::executor::block_on;
@@ -38,6 +38,9 @@ fn main() {
 
         time_json_fetch(&postgresql_pool);
         time_json_fetch(&sqlite_pool);
+
+        time_window_select(&postgresql_pool);
+        time_window_select(&sqlite_pool);
     }
 
 }

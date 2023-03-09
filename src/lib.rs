@@ -1663,6 +1663,16 @@ impl Select {
 
         let mut window_select = self.clone();
         window_select.window("COUNT", "1", Some("count"));
+        match self.limit {
+            None => window_select.limit(Self::WEB_LIMIT_DEFAULT),
+            Some(l) => {
+                if l > Self::WEB_LIMIT_MAX {
+                    window_select.limit(Self::WEB_LIMIT_MAX)
+                } else {
+                    window_select.limit(l)
+                }
+            }
+        };
 
         let rows = match window_select.fetch_rows_as_json(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
@@ -1709,13 +1719,7 @@ impl Select {
             "end".to_string(),
             match window_select.limit {
                 None => json!(start + Self::WEB_LIMIT_DEFAULT),
-                Some(l) => {
-                    if l > Self::WEB_LIMIT_MAX {
-                        json!(start + Self::WEB_LIMIT_MAX)
-                    } else {
-                        json!(start + l)
-                    }
-                }
+                Some(l) => json!(start + l),
             },
         );
         json_object.insert("count".to_string(), json!(count));
@@ -1764,12 +1768,24 @@ impl Select {
             err_json
         }
 
-        let rows = match self.fetch_rows_as_json(pool, param_map) {
+        let mut limited_select = self.clone();
+        match self.limit {
+            None => limited_select.limit(Self::WEB_LIMIT_DEFAULT),
+            Some(l) => {
+                if l > Self::WEB_LIMIT_MAX {
+                    limited_select.limit(Self::WEB_LIMIT_MAX)
+                } else {
+                    limited_select.limit(l)
+                }
+            }
+        };
+
+        let rows = match limited_select.fetch_rows_as_json(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
 
-        let count = match self.get_row_count(pool, param_map) {
+        let count = match limited_select.get_row_count(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
             Ok(count) => count,
         };
@@ -1777,22 +1793,16 @@ impl Select {
         let mut json_object = SerdeMap::new();
         json_object.insert("status".to_string(), json!(200));
         json_object.insert("unit".to_string(), json!("items"));
-        let start = match self.offset {
+        let start = match limited_select.offset {
             None => 0,
             Some(i) => i,
         };
         json_object.insert("start".to_string(), json!(start));
         json_object.insert(
             "end".to_string(),
-            match self.limit {
+            match limited_select.limit {
                 None => json!(start + Self::WEB_LIMIT_DEFAULT),
-                Some(l) => {
-                    if l > Self::WEB_LIMIT_MAX {
-                        json!(start + Self::WEB_LIMIT_MAX)
-                    } else {
-                        json!(start + l)
-                    }
-                }
+                Some(l) => json!(start + l),
             },
         );
         json_object.insert("count".to_string(), json!(count));
