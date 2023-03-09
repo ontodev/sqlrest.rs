@@ -56,8 +56,8 @@ pub fn get_setup_sql() -> (String, String, String) {
 }
 
 pub fn time_window_select(pool: &AnyPool) {
-    println!("Checking performance of fetch_as_json_using_window().");
-    println!("=====================================================");
+    println!("Checking performance of fetch_as_json_using_window() for {:?}.", pool.any_kind());
+    println!("====");
     let (drop, create, insert) = get_setup_sql();
     let num_iterations = 5;
     for i in 1..(num_iterations + 1) {
@@ -87,13 +87,13 @@ pub fn time_window_select(pool: &AnyPool) {
         println!("Elapsed time for two query fetch: {:.2?}", start.elapsed());
     }
 
-    println!("Done checking performance of fetch_as_json_using_window().");
-    println!("==========================================================");
+    println!("Done performance check of fetch_as_json_using_window() for {:?}.", pool.any_kind());
+    println!("====");
 }
 
 pub fn time_json_fetch(pool: &AnyPool) {
-    println!("Checking performance of fetch_rows_as_json().");
-    println!("=============================================");
+    println!("Checking performance of fetch_rows_as_json() for {:?}.", pool.any_kind());
+    println!("====");
 
     let (drop, create, insert) = get_setup_sql();
     let num_iterations = 5;
@@ -134,6 +134,6 @@ pub fn time_json_fetch(pool: &AnyPool) {
         println!("Elapsed time after iterating: {:.2?}", start.elapsed());
         println!("----------");
     }
-    println!("Done checking performance of fetch_rows_as_json().");
-    println!("==================================================");
+    println!("Done checking performance of fetch_rows_as_json() for {:?}.", pool.any_kind());
+    println!("====");
 }
