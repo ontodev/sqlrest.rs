@@ -71,11 +71,12 @@ pub fn time_window_select(pool: &AnyPool) {
         let query = sqlx_query("VACUUM");
         block_on(query.execute(pool)).unwrap();
 
-        // Time the query:
         let select = Select::new("my_table");
+
+        // Time the query:
         let start = Instant::now();
-        let _rows = select.fetch_as_json_using_window(pool, &HashMap::new()).unwrap();
-        println!("Elapsed time for window fetch: {:.2?}", start.elapsed());
+        let _rows = select.fetch_as_json_using_two_queries(pool, &HashMap::new()).unwrap();
+        println!("Elapsed time for two query fetch: {:.2?}", start.elapsed());
 
         // Run the VACUUM command to clear the cache:
         let query = sqlx_query("VACUUM");
@@ -83,8 +84,8 @@ pub fn time_window_select(pool: &AnyPool) {
 
         // Time the query:
         let start = Instant::now();
-        let _rows = select.fetch_as_json_using_two_queries(pool, &HashMap::new()).unwrap();
-        println!("Elapsed time for two query fetch: {:.2?}", start.elapsed());
+        let _rows = select.fetch_as_json_using_window(pool, &HashMap::new()).unwrap();
+        println!("Elapsed time for window fetch: {:.2?}", start.elapsed());
     }
 
     println!("Done performance check of fetch_as_json_using_window() for {:?}.", pool.any_kind());
