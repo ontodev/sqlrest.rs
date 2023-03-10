@@ -5,8 +5,9 @@
 //! ## Working with Select structs
 //! ```rust
 //! use ontodev_sqlrest::{
-//!     bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
-//!     interpolate_sql, local_sql_syntax, DbType, Direction, Filter, Select, selects_to_sql,
+//!     bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
+//!     fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
+//!     Filter, Select, selects_to_sql,
 //! };
 //! use futures::executor::block_on;
 //! use indoc::indoc;
@@ -80,15 +81,7 @@
 //!     interpolated_sql
 //! );
 //!
-//! # // TODO: Wrap the two steps below into its own function.
-//! let mut test_query = sqlx_query(&bound_sql);
-//! for param in &test_params {
-//!     match param {
-//!         SerdeValue::String(s) => test_query = test_query.bind(s),
-//!         SerdeValue::Number(n) => test_query = test_query.bind(n.as_i64()),
-//!         _ => panic!("{} is not a string or a number.", param),
-//!     };
-//! }
+//! let test_query = construct_query(&bound_sql, &test_params).unwrap();
 //! let row = block_on(test_query.fetch_one(pool)).unwrap();
 //! # let table: &str = row.get("table");
 //! # assert_eq!(table, "foo");
@@ -232,15 +225,7 @@
 //! #         SerdeValue::String(s) if s == "bar_val2" => assert!(true),
 //! #         _ => assert!(false, "{} != 'bar_val2'", params[2]),
 //! #     };
-//! #   // TODO: Wrap the two steps below into its own function
-//!     let mut query = sqlx_query(&sql);
-//!     for param in &params {
-//!         match param {
-//!             SerdeValue::String(s) => query = query.bind(s),
-//!             SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-//!             _ => panic!("{} is not a string or a number.", param),
-//!         };
-//!     }
+//!     let query = construct_query(&sql, &params).unwrap();
 //!     block_on(query.execute(pool)).unwrap();
 //! }
 //!
@@ -615,8 +600,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as SerdeMap, Value as SerdeValue};
 use sqlx::{
-    any::{AnyKind, AnyPool, AnyRow},
-    query as sqlx_query, Row,
+    any::{Any, AnyArguments, AnyKind, AnyPool, AnyRow},
+    query as sqlx_query,
+    query::Query,
+    Row,
 };
 use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
@@ -1062,6 +1049,23 @@ impl Window {
     }
 }
 
+/// Given an SQL string that has been bound to the given parameter vector, construct a database
+/// query and return it.
+pub fn construct_query<'a>(
+    sql: &'a str,
+    param_vec: &'a Vec<&'a SerdeValue>,
+) -> Result<Query<'a, Any, AnyArguments<'a>>, String> {
+    let mut query = sqlx_query::<Any>(&sql);
+    for param in param_vec {
+        match param {
+            SerdeValue::String(s) => query = query.bind(s),
+            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
+            _ => return Err(format!("{} is not a string or a number.", param)),
+        };
+    }
+    Ok(query)
+}
+
 /// A structure to represent an SQL select statement.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
@@ -1384,9 +1388,9 @@ impl Select {
         if !self.group_by.is_empty() || !self.having.is_empty() {
             return Err("GROUP BY / HAVING clauses are not supported in to_url()".to_string());
         }
-
-        // TODO: self.window is silently ignored in this function. Should we be doing somthing
-        // else instead?
+        if let Some(_) = self.window {
+            return Err("Window functions are not supported in to_url()".to_string());
+        }
 
         // Helper function to surround any 'special' strings with double-quotes. These include
         // strings composed entirely of numeric symbols, as well as strings containing one of the
@@ -1560,20 +1564,14 @@ impl Select {
             Ok((sql, param_vec)) => (sql, param_vec),
         };
 
-        // TODO: Wrap the two steps below into its own function
-        let mut query = sqlx_query(&sql);
-        for param in &param_vec {
-            match param {
-                SerdeValue::String(s) => query = query.bind(s),
-                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                _ => return Err(format!("{} is not a string or a number.", param)),
-            };
-        }
-
-        match block_on(query.fetch_all(pool)) {
-            Err(e) => Err(format!("{}", e)),
-            Ok(k) => Ok(k),
-        }
+        let result = match construct_query(&sql, &param_vec) {
+            Err(e) => Err(e),
+            Ok(query) => match block_on(query.fetch_all(pool)) {
+                Err(e) => Err(format!("{}", e)),
+                Ok(k) => Ok(k),
+            },
+        };
+        result
     }
 
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
@@ -1624,30 +1622,19 @@ impl Select {
         };
         match self.to_sql_count(&dbtype) {
             Err(e) => return Err(e),
-            Ok(sql) => {
-                match bind_sql(pool, sql, param_map) {
+            Ok(sql) => match bind_sql(pool, sql, param_map) {
+                Err(e) => return Err(e),
+                Ok((bound_sql, params)) => match construct_query(&bound_sql, &params) {
                     Err(e) => return Err(e),
-                    Ok((bound_sql, params)) => {
-                        // TODO: Wrap the two steps below into its own function
-                        let mut query = sqlx_query(&bound_sql);
-                        for param in &params {
-                            match param {
-                                SerdeValue::String(s) => query = query.bind(s),
-                                SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-                                _ => panic!("{} is not a string or a number.", param),
-                            };
-                        }
-                        let row = block_on(query.fetch_one(pool));
-                        match row {
+                    Ok(query) => match block_on(query.fetch_one(pool)) {
+                        Err(e) => return Err(e.to_string()),
+                        Ok(row) => match row.try_get::<i64, &str>("count") {
                             Err(e) => return Err(e.to_string()),
-                            Ok(row) => match row.try_get::<i64, &str>("count") {
-                                Err(e) => return Err(e.to_string()),
-                                Ok(count) => Ok(count as usize),
-                            },
-                        }
-                    }
-                }
-            }
+                            Ok(count) => Ok(count as usize),
+                        },
+                    },
+                },
+            },
         }
     }
     /// Maximum allowable value of [Select::limit] when querying from the web.
@@ -2287,20 +2274,15 @@ pub fn fetch_rows_from_selects(
         Err(e) => return Err(e),
         Ok((sql, params)) => (sql, params),
     };
-    // TODO: Wrap the two steps below into its own function
-    let mut query = sqlx_query(&sql);
-    for param in params {
-        match param {
-            SerdeValue::String(s) => query = query.bind(s),
-            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-            _ => return Err(format!("{} is not a string or a number.", param)),
-        };
-    }
 
-    match block_on(query.fetch_all(pool)) {
-        Err(e) => Err(format!("{}", e)),
-        Ok(k) => Ok(k),
-    }
+    let result = match construct_query(&sql, &params) {
+        Err(e) => Err(e),
+        Ok(query) => match block_on(query.fetch_all(pool)) {
+            Err(e) => Err(format!("{}", e)),
+            Ok(k) => Ok(k),
+        },
+    };
+    result
 }
 
 /// Given a JSON-formatted string representing an array of objects such that each object represents
@@ -2368,30 +2350,24 @@ pub fn fetch_rows_as_json_from_selects(
         Err(e) => return Err(e),
         Ok((sql, params)) => (sql, params),
     };
-    // TODO: Wrap the two steps below into its own function.
-    let mut query = sqlx_query(&sql);
-    for param in params {
-        match param {
-            SerdeValue::String(s) => query = query.bind(s),
-            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-            _ => return Err(format!("{} is not a string or a number.", param)),
-        };
-    }
 
-    // Execute the query, extract the JSON row and return it:
-    match block_on(query.fetch_all(pool)) {
-        Err(e) => Err(format!("{}", e)),
-        Ok(rows) if rows.len() != 1 => {
-            Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()))
-        }
-        Ok(mut rows) => {
-            let row = rows.pop().unwrap();
-            match row.try_get("row") {
-                Err(e) => Err(format!("{}", e)),
-                Ok(json_row) => extract_rows_from_json_str(json_row),
+    let result = match construct_query(&sql, &params) {
+        Err(e) => Err(e),
+        Ok(query) => match block_on(query.fetch_all(pool)) {
+            Err(e) => Err(format!("{}", e)),
+            Ok(rows) if rows.len() != 1 => {
+                Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()))
             }
-        }
-    }
+            Ok(mut rows) => {
+                let row = rows.pop().unwrap();
+                match row.try_get("row") {
+                    Err(e) => Err(format!("{}", e)),
+                    Ok(json_row) => extract_rows_from_json_str(json_row),
+                }
+            }
+        },
+    };
+    result
 }
 
 /// Given a database pool and a SQL string containing a number of placeholders, `{key}`, where `key`

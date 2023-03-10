@@ -7,8 +7,9 @@
 ### Working with Select structs
 ```rust
 use ontodev_sqlrest::{
-    bind_sql, get_db_type, fetch_rows_from_selects, fetch_rows_as_json_from_selects,
-    interpolate_sql, local_sql_syntax, DbType, Direction, Filter, Select, selects_to_sql,
+    bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
+    fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
+    Filter, Select, selects_to_sql,
 };
 use futures::executor::block_on;
 use indoc::indoc;
@@ -63,14 +64,7 @@ assert_eq!(
     interpolated_sql
 );
 
-let mut test_query = sqlx_query(&bound_sql);
-for param in &test_params {
-    match param {
-        SerdeValue::String(s) => test_query = test_query.bind(s),
-        SerdeValue::Number(n) => test_query = test_query.bind(n.as_i64()),
-        _ => panic!("{} is not a string or a number.", param),
-    };
-}
+let test_query = construct_query(&bound_sql, &test_params).unwrap();
 let row = block_on(test_query.fetch_one(pool)).unwrap();
 
 /*
@@ -140,14 +134,7 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
     );
     let (sql, params) = bind_sql(pool, &sql, &param_map).unwrap();
     assert_eq!(expected_sql_with_listvars, sql);
-    let mut query = sqlx_query(&sql);
-    for param in &params {
-        match param {
-            SerdeValue::String(s) => query = query.bind(s),
-            SerdeValue::Number(n) => query = query.bind(n.as_i64()),
-            _ => panic!("{} is not a string or a number.", param),
-        };
-    }
+    let query = construct_query(&sql, &params).unwrap();
     block_on(query.execute(pool)).unwrap();
 }
 
