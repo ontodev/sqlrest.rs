@@ -1597,10 +1597,12 @@ impl Select {
             Ok(rows) => rows,
         };
 
-        if rows.len() != 1 {
-            return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
-        }
-        let row = rows.pop().unwrap();
+        let row = {
+            if rows.len() != 1 {
+                return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
+            }
+            rows.pop().unwrap()
+        };
 
         let json_row = match row.try_get("row") {
             Err(e) => return Err(e.to_string()),
@@ -2407,8 +2409,11 @@ pub fn bind_sql<'a, S: Into<String>>(
             final_sql.push_str(this_match);
         } else {
             // Remove the opening and closing braces from the placeholder, `{key}`:
-            // TODO: Do not use unwrap() here.
-            let key = this_match.strip_prefix("{").and_then(|s| s.strip_suffix("}")).unwrap();
+            let key = match this_match.strip_prefix("{").and_then(|s| s.strip_suffix("}")) {
+                None => return Err(format!("'{}' is not enclosed in curly braces.", this_match)),
+                Some(k) => k,
+            };
+
             match param_map.get(key) {
                 None => return Err(format!("Key '{}' not found in parameter map", key)),
                 Some(param) => {
@@ -2491,15 +2496,24 @@ pub fn interpolate_sql<S: Into<String>>(
     let mut saved_start = 0;
 
     let quotes = r#"('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")"#;
-    // TODO: Do not use unwrap() here.
-    let rx;
-    if let Some(s) = placeholder_str {
-        rx = Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s.into())).unwrap();
-    } else if pool.any_kind() == AnyKind::Postgres {
-        rx = Regex::new(&format!(r#"{}|\B[$]\d+\b"#, quotes)).unwrap();
-    } else {
-        rx = Regex::new(&format!(r#"{}|\B[?]\B"#, quotes)).unwrap();
-    }
+    let rx = {
+        if let Some(s) = placeholder_str {
+            match Regex::new(&format!(r#"{}|\b{}\b"#, quotes, s.into())) {
+                Err(e) => return Err(e.to_string()),
+                Ok(r) => r,
+            }
+        } else if pool.any_kind() == AnyKind::Postgres {
+            match Regex::new(&format!(r#"{}|\B[$]\d+\b"#, quotes)) {
+                Err(e) => return Err(e.to_string()),
+                Ok(r) => r,
+            }
+        } else {
+            match Regex::new(&format!(r#"{}|\B[?]\B"#, quotes)) {
+                Err(e) => return Err(e.to_string()),
+                Ok(r) => r,
+            }
+        }
+    };
 
     let mut param_index = 0;
     for m in rx.find_iter(&sql) {
