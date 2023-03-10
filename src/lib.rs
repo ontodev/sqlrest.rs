@@ -375,11 +375,11 @@
 //! }
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! /*
-//!  * Call fetch_as_json_using_window() which returns results suitable for paging as part of a web application.
+//!  * Call fetch_as_json() which returns results suitable for paging as part of a web application.
 //!  */
 //! let mut select = Select::new("my_table");
 //! select.limit(2).offset(1);
-//! let rows = select.fetch_as_json_using_window(&postgresql_pool, &HashMap::new()).unwrap();
+//! let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
 //! assert_eq!(
 //!     format!("{}", json!(rows)),
 //!     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
@@ -1655,8 +1655,8 @@ impl Select {
     /// Default value to use for the limit parameter when querying from the web.
     pub const WEB_LIMIT_DEFAULT: usize = 20;
 
-    /// TODO: Add a docstring here. Note that we should keep either this function or the
-    /// "two queries" version but not both.
+    /// Alternative to [fetch_as_json()](Select::fetch_as_json) that uses a window function instead
+    /// of a separate query to get the number of rows corresponding to the query in the database.
     pub fn fetch_as_json_using_window(
         &self,
         pool: &AnyPool,
@@ -1764,7 +1764,7 @@ impl Select {
     /// In case of an error a JSON object in the following format will be returned:
     ///   * `status`: HTTP status code
     ///   * `error`: The error message.
-    pub fn fetch_as_json_using_two_queries(
+    pub fn fetch_as_json(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
@@ -2725,7 +2725,7 @@ mod tests {
         let select = Select::new("nonexistent_table");
         let expected_json = "{\"status\":400,\"error\":\"error returned from database: relation \
                              \\\"nonexistent_table\\\" does not exist\"}";
-        match select.fetch_as_json_using_window(&pool, &HashMap::new()) {
+        match select.fetch_as_json(&pool, &HashMap::new()) {
             Err(json) => assert_eq!(json!(json).to_string(), expected_json),
             Ok(json) => panic!(
                 "Got successful response: {} but was expecting the error: {}",

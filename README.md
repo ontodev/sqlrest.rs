@@ -245,11 +245,11 @@ for pool in vec![sqlite_pool, postgresql_pool] {
             .unwrap();
 }
 /*
- * Call fetch_as_json_using_window() which returns results suitable for paging as part of a web application.
+ * Call fetch_as_json() which returns results suitable for paging as part of a web application.
  */
 let mut select = Select::new("my_table");
 select.limit(2).offset(1);
-let rows = select.fetch_as_json_using_window(&postgresql_pool, &HashMap::new()).unwrap();
+let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
 assert_eq!(
     format!("{}", json!(rows)),
     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\

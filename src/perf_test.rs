@@ -75,7 +75,7 @@ pub fn time_window_select(pool: &AnyPool) {
 
         // Time the query:
         let start = Instant::now();
-        let _rows = select.fetch_as_json_using_two_queries(pool, &HashMap::new()).unwrap();
+        let _rows = select.fetch_as_json(pool, &HashMap::new()).unwrap();
         println!("Elapsed time for two query fetch: {:.2?}", start.elapsed());
 
         // Run the VACUUM command to clear the cache:
