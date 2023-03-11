@@ -13,7 +13,7 @@ fn main() {
     {
         // this block limits scope of borrows by ap.refer() method
         let mut ap = ArgumentParser::new();
-        ap.set_description(r#"SQLRest.rs"#);
+        ap.set_description(r#"SQLRest.rs performance testing command line tool"#);
         ap.refer(&mut json_fetch).add_option(
             &["--json_fetch"],
             StoreTrue,

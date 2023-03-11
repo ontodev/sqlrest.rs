@@ -367,7 +367,7 @@
 //! let rows = select.fetch_as_json(&postgresql_pool, &HashMap::new()).unwrap();
 //! assert_eq!(
 //!     format!("{}", json!(rows)),
-//!     "{\"status\":200,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
+//!     "{\"status\":206,\"unit\":\"items\",\"start\":1,\"end\":3,\"count\":4,\"rows\":\
 //!      [{\"row_number\":2,\"prefix\":\"p2\",\"base\":\"b2\",\"ontology IRI\":\"o2\",\
 //!      \"version IRI\":\"v2\"},{\"row_number\":3,\"prefix\":\"p3\",\"base\":\"b3\",\
 //!      \"ontology IRI\":\"o3\",\"version IRI\":\"v3\"}]}"
@@ -609,6 +609,8 @@ use std::{collections::HashMap, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
 
+pub const HTTP_SUCCESS: usize = 200;
+pub const HTTP_SUCCESS_PARTIAL_CONTENT: usize = 206;
 pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ ]+$";
 
 lazy_static! {
@@ -1675,7 +1677,6 @@ impl Select {
             Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
-
         let count = {
             if rows.len() < 1 {
                 // If no rows are returned it could be because the offset is too high. In that case
@@ -1703,9 +1704,16 @@ impl Select {
                 }
             }
         };
+        let http_status = {
+            if count > rows.len() {
+                HTTP_SUCCESS_PARTIAL_CONTENT
+            } else {
+                HTTP_SUCCESS
+            }
+        };
 
         let mut json_object = SerdeMap::new();
-        json_object.insert("status".to_string(), json!(200));
+        json_object.insert("status".to_string(), json!(http_status));
         json_object.insert("unit".to_string(), json!("items"));
         let start = match window_select.offset {
             None => 0,
@@ -1781,14 +1789,20 @@ impl Select {
             Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
-
         let count = match limited_select.get_row_count(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
             Ok(count) => count,
         };
+        let http_status = {
+            if count > rows.len() {
+                HTTP_SUCCESS_PARTIAL_CONTENT
+            } else {
+                HTTP_SUCCESS
+            }
+        };
 
         let mut json_object = SerdeMap::new();
-        json_object.insert("status".to_string(), json!(200));
+        json_object.insert("status".to_string(), json!(http_status));
         json_object.insert("unit".to_string(), json!("items"));
         let start = match limited_select.offset {
             None => 0,
