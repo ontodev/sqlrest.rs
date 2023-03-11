@@ -286,7 +286,7 @@ let result = parse(from_url);
 assert!(result.is_err());
 ```
 
-#### Select the columns "foo" and "goo" from the table "bar" with no filtering.
+#### Select specific columns from the table "bar" with no filtering.
 ```rust
 let from_url = "bar?select=foo,goo";
 let expected_sql = "SELECT \"foo\", \"goo\" FROM \"bar\"";
@@ -321,6 +321,15 @@ assert!(result.is_err());
 let from_url = "bar?select=%22foo%20moo%22,goo";
 let result = parse(from_url);
 assert!(result.is_err());
+
+// Column aliases are supported using the syntax: alias:column
+let from_url = "bar?select=a bar:a foo,goo,loop:goop";
+let expected_sql =
+    "SELECT \"a foo\" AS \"a bar\", \"goo\", \"goop\" AS \"loop\" FROM \"bar\"";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(encode(from_url), select.to_url().unwrap());
 ```
 
 #### Select all columns from the table, bar, with filtering.

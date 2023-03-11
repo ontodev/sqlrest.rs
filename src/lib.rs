@@ -414,7 +414,7 @@
 //! assert!(result.is_err());
 //! ```
 //!
-//! ### Select the columns "foo" and "goo" from the table "bar" with no filtering.
+//! ### Select specific columns from the table "bar" with no filtering.
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
@@ -451,6 +451,15 @@
 //! let from_url = "bar?select=%22foo%20moo%22,goo";
 //! let result = parse(from_url);
 //! assert!(result.is_err());
+//!
+//! // Column aliases are supported using the syntax: alias:column
+//! let from_url = "bar?select=a bar:a foo,goo,loop:goop";
+//! let expected_sql =
+//!     "SELECT \"a foo\" AS \"a bar\", \"goo\", \"goop\" AS \"loop\" FROM \"bar\"";
+//! let select = parse(from_url).unwrap();
+//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
+//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(encode(from_url), select.to_url().unwrap());
 //! ```
 //!
 //! ### Select all columns from the table, bar, with filtering.
@@ -1422,12 +1431,20 @@ impl Select {
         let mut params = vec![];
         if self.select.len() > 0 {
             let mut parts = vec![];
-            for (column, _alias) in &self.select {
+            for (column, alias) in &self.select {
                 let column = unquote(column).unwrap_or(column.to_string());
                 if let Err(e) = is_simple(&column) {
-                    return Err(format!("While reading SELECT field, got error: {}", e));
+                    return Err(e.to_string());
                 }
-                parts.push(column);
+                if let Some(alias) = alias {
+                    let alias = unquote(alias).unwrap_or(alias.to_string());
+                    if let Err(e) = is_simple(&alias) {
+                        return Err(e.to_string());
+                    }
+                    parts.push(format!("{}:{}", alias, column));
+                } else {
+                    parts.push(column);
+                }
             }
             params.push(format!("select={}", parts.join(",")));
         }
@@ -2101,16 +2118,56 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
 /// transduce the list of strings indicated by the node into a "SELECT" clause for the Select
 /// struct.
 pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
-    // TODO: Support aliases.
+    // Helper function to extract the column and alias from the given node and string:
+    fn extract_column_alias(n: &Node, raw: &str) -> Result<(String, Option<String>), String> {
+        let child_count = n.named_child_count();
+        let column;
+        let alias;
+        if child_count == 1 {
+            alias = None;
+            column = match n.named_child(0) {
+                Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Ok(column) => column.to_string(),
+                    Err(e) => return Err(e.to_string()),
+                },
+                _ => return Err(format!("Unable to extract column from Node: {:?}", n)),
+            };
+        } else if child_count == 2 {
+            alias = match n.named_child(0) {
+                Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Ok(alias) => Some(alias.to_string()),
+                    Err(e) => return Err(e.to_string()),
+                },
+                _ => return Err(format!("Unable to extract alias from Node: {:?}", n)),
+            };
+            column = match n.named_child(1) {
+                Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Ok(column) => column.to_string(),
+                    Err(e) => return Err(e.to_string()),
+                },
+                _ => return Err(format!("Unable to extract column from Node: {:?}", n)),
+            };
+        } else {
+            return Err("Number of child nodes in node kind: {} should be 1 or 2.".to_string());
+        }
+        Ok((column, alias))
+    }
+
     match query_result {
         Err(_) => return,
         Ok(query) => {
             let child_count = n.named_child_count();
             for i in 0..child_count {
-                let column = {
+                let (column, alias) = {
                     match n.named_child(i) {
                         Some(child) => match decode(&get_from_raw(&child, raw)) {
-                            Ok(column) => column.to_string(),
+                            Ok(_) => match extract_column_alias(&child, raw) {
+                                Ok((column, alias)) => (column, alias),
+                                Err(e) => {
+                                    *query_result = Err(e.to_string());
+                                    return;
+                                }
+                            },
                             Err(e) => {
                                 *query_result = Err(e.to_string());
                                 return;
@@ -2125,7 +2182,11 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
                         }
                     }
                 };
-                query.add_select(format!("\"{}\"", column));
+                match alias {
+                    None => query.add_select(format!("\"{}\"", column)),
+                    Some(alias) => query
+                        .add_aliased_select(format!("\"{}\"", column), format!("\"{}\"", alias)),
+                };
             }
         }
     }
