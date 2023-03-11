@@ -71,9 +71,10 @@ let row = block_on(test_query.fetch_one(pool)).unwrap();
  * Create a new Select struct by calling new() and progressively adding fields.
  */
 let mut select = Select::new(r#""a table name with spaces""#);
-select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
+select.explicit_select(vec![("foo", Some("foo"), None),
+                            (r#""a column name with spaces""#, Some("C"), None)]);
 select.add_select("bar");
-select.add_aliased_select("COUNT(1)", "count");
+select.add_explicit_select("COUNT(1)", Some("count"), None);
 select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
@@ -187,7 +188,7 @@ let postgresql_rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
 let mut select = Select::new(r#""a table name with spaces""#);
 select
     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
-    .add_aliased_select("COUNT(1)", "count")
+    .add_explicit_select("COUNT(1)", Some("count"), None)
     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
@@ -322,13 +323,17 @@ let from_url = "bar?select=%22foo%20moo%22,goo";
 let result = parse(from_url);
 assert!(result.is_err());
 
-// Column aliases are supported using the syntax: alias:column
-let from_url = "bar?select=a bar:a foo,goo,loop:goop";
-let expected_sql =
-    "SELECT \"a foo\" AS \"a bar\", \"goo\", \"goop\" AS \"loop\" FROM \"bar\"";
+// Aliasing and casting of columns is supported (but optional) using the syntax:
+// [ALIAS:]COLUMN[::CAST]
+let from_url = "bar?select=a bar:a foo::text,goo::text,loop:goop";
+let expected_postgres_sql =
+    "SELECT \"a foo\"::TEXT AS \"a bar\", \"goo\"::TEXT, \"goop\" AS \"loop\" FROM \"bar\"";
+let expected_sqlite_sql =
+    "SELECT CAST(\"a foo\" AS TEXT) AS \"a bar\", CAST(\"goo\" AS TEXT), \
+     \"goop\" AS \"loop\" FROM \"bar\"";
 let select = parse(from_url).unwrap();
-assert_eq!(expected_sql, select.to_sqlite().unwrap());
-assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(expected_sqlite_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_postgres_sql, select.to_postgres().unwrap());
 assert_eq!(encode(from_url), select.to_url().unwrap());
 ```
 

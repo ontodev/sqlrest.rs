@@ -150,9 +150,10 @@
 //!  */
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! let mut select = Select::new(r#""a table name with spaces""#);
-//! select.aliased_select(vec![("foo", "foo"), (r#""a column name with spaces""#, "C")]);
+//! select.explicit_select(vec![("foo", Some("foo"), None),
+//!                             (r#""a column name with spaces""#, Some("C"), None)]);
 //! select.add_select("bar");
-//! select.add_aliased_select("COUNT(1)", "count");
+//! select.add_explicit_select("COUNT(1)", Some("count"), None);
 //! select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 //! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 //! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
@@ -293,7 +294,7 @@
 //! let mut select = Select::new(r#""a table name with spaces""#);
 //! select
 //!     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
-//!     .add_aliased_select("COUNT(1)", "count")
+//!     .add_explicit_select("COUNT(1)", Some("count"), None)
 //!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
 //!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
 //!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
@@ -452,13 +453,17 @@
 //! let result = parse(from_url);
 //! assert!(result.is_err());
 //!
-//! // Column aliases are supported using the syntax: alias:column
-//! let from_url = "bar?select=a bar:a foo,goo,loop:goop";
-//! let expected_sql =
-//!     "SELECT \"a foo\" AS \"a bar\", \"goo\", \"goop\" AS \"loop\" FROM \"bar\"";
+//! // Aliasing and casting of columns is supported (but optional) using the syntax:
+//! // [ALIAS:]COLUMN[::CAST]
+//! let from_url = "bar?select=a bar:a foo::text,goo::text,loop:goop";
+//! let expected_postgres_sql =
+//!     "SELECT \"a foo\"::TEXT AS \"a bar\", \"goo\"::TEXT, \"goop\" AS \"loop\" FROM \"bar\"";
+//! let expected_sqlite_sql =
+//!     "SELECT CAST(\"a foo\" AS TEXT) AS \"a bar\", CAST(\"goo\" AS TEXT), \
+//!      \"goop\" AS \"loop\" FROM \"bar\"";
 //! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(expected_sqlite_sql, select.to_sqlite().unwrap());
+//! assert_eq!(expected_postgres_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
 //! ```
 //!
@@ -1019,7 +1024,7 @@ pub fn filters_to_sql(filters: &Vec<Filter>, dbtype: &DbType) -> Result<String, 
     Ok(parts.join(joiner))
 }
 
-/// Representation of a window function in an SQL query. If Alias is None it defaults to
+/// Representation of a window function in an SQL query. If the alias is None it defaults to
 /// '<function_name>_<column_name>'.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Window {
@@ -1041,7 +1046,7 @@ impl Window {
         }
     }
 
-    /// Clone the given window.
+    /// Clone the given Window.
     pub fn clone(window: &Window) -> Window {
         Window { ..window.clone() }
     }
@@ -1081,7 +1086,7 @@ pub fn construct_query<'a>(
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     pub table: String,
-    pub select: Vec<(String, Option<String>)>,
+    pub select: Vec<(String, Option<String>, Option<String>)>,
     pub filter: Vec<Filter>,
     pub window: Option<Window>,
     pub group_by: Vec<String>,
@@ -1114,7 +1119,7 @@ impl Select {
     pub fn select<S: Into<String>>(&mut self, select: Vec<S>) -> &mut Select {
         self.select.clear();
         for s in select {
-            self.select.push((s.into(), None));
+            self.select.push((s.into(), None, None));
         }
         self
     }
@@ -1122,24 +1127,48 @@ impl Select {
     /// Given a vector of tuples such that the first place of each tuple is a column expression
     /// and the second place is an alias for that expression, replace the current contents of
     /// `self.select` with the contents of the given vector.
-    pub fn aliased_select<S: Into<String>>(&mut self, select: Vec<(S, S)>) -> &mut Select {
+    pub fn explicit_select<S: Into<String>>(
+        &mut self,
+        select: Vec<(S, Option<S>, Option<S>)>,
+    ) -> &mut Select {
         self.select.clear();
-        for (column, alias) in select {
-            self.select.push((column.into(), Some(alias.into())));
+        for (column, alias, cast) in select {
+            let alias = match alias {
+                Some(a) => Some(a.into()),
+                None => None,
+            };
+            let cast = match cast {
+                Some(c) => Some(c.into()),
+                None => None,
+            };
+            self.add_explicit_select(column.into(), alias, cast);
         }
         self
     }
 
     /// Given a column expression, add it to the vector, `self.select` without an alias.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
-        self.select.push((select.into(), None));
+        self.select.push((select.into(), None, None));
         self
     }
 
     /// Given a column expression and an alias for that expression, add the tuple (column, alias) to
     /// the vector, `self.select`.
-    pub fn add_aliased_select<S: Into<String>>(&mut self, column: S, alias: S) -> &mut Select {
-        self.select.push((column.into(), Some(alias.into())));
+    pub fn add_explicit_select<S: Into<String>>(
+        &mut self,
+        column: S,
+        alias: Option<S>,
+        cast: Option<S>,
+    ) -> &mut Select {
+        let alias = match alias {
+            Some(a) => Some(a.into()),
+            None => None,
+        };
+        let cast = match cast {
+            Some(c) => Some(c.into()),
+            None => None,
+        };
+        self.select.push((column.into(), alias, cast));
         self
     }
 
@@ -1266,7 +1295,7 @@ impl Select {
             Ok(rows) => {
                 for row in &rows {
                     let cname: &str = row.get("name");
-                    self.select.push((format!(r#""{}""#, cname), None));
+                    self.add_explicit_select(format!(r#""{}""#, cname), None, None);
                 }
             }
             Err(e) => return Err(e.to_string()),
@@ -1288,15 +1317,19 @@ impl Select {
             select_clause = String::from("*");
         } else {
             let mut select_columns = vec![];
-            for (column, alias) in &self.select {
-                let column = quote_if_whitespace(&column);
-                select_columns.push(format!("{}{}", column, {
-                    if let Some(alias) = alias {
-                        format!(" AS {}", alias)
-                    } else {
-                        "".to_string()
-                    }
-                }));
+            for (column, alias, cast) in &self.select {
+                let mut clause = quote_if_whitespace(&column);
+                if let Some(cast) = cast {
+                    let cast = cast.to_uppercase();
+                    match *dbtype {
+                        DbType::Postgres => clause = format!("{}::{}", clause, cast),
+                        DbType::Sqlite => clause = format!("CAST({} AS {})", clause, cast),
+                    };
+                }
+                if let Some(alias) = alias {
+                    clause.push_str(&format!(" AS {}", quote_if_whitespace(&alias)));
+                }
+                select_columns.push(clause);
             }
             select_clause = select_columns.join(", ");
         }
@@ -1431,20 +1464,31 @@ impl Select {
         let mut params = vec![];
         if self.select.len() > 0 {
             let mut parts = vec![];
-            for (column, alias) in &self.select {
+            for (column, alias, cast) in &self.select {
                 let column = unquote(column).unwrap_or(column.to_string());
                 if let Err(e) = is_simple(&column) {
                     return Err(e.to_string());
                 }
+                let mut part = String::from("");
                 if let Some(alias) = alias {
                     let alias = unquote(alias).unwrap_or(alias.to_string());
                     if let Err(e) = is_simple(&alias) {
                         return Err(e.to_string());
                     }
-                    parts.push(format!("{}:{}", alias, column));
+                    part.push_str(&format!("{}:{}", alias, column));
                 } else {
-                    parts.push(column);
+                    part.push_str(&column);
                 }
+                match cast {
+                    Some(cast) if cast != "" => {
+                        if let Err(e) = is_simple(&cast) {
+                            return Err(e.to_string());
+                        }
+                        part.push_str(&format!("::{}", cast));
+                    }
+                    _ => (),
+                };
+                parts.push(part);
             }
             params.push(format!("select={}", parts.join(",")));
         }
@@ -1557,7 +1601,9 @@ impl Select {
             sql
         } else if dbtype == DbType::Sqlite {
             let mut json_keys = vec![];
-            for (column, alias) in &self.select {
+            // Casting is irrelevant here. If there are any casts they will have been taken account
+            // of in the to_sql() function.
+            for (column, alias, _cast) in &self.select {
                 let unquoted_column = match alias {
                     Some(alias) => alias.to_string(),
                     None => unquote(&column).unwrap_or(column.clone()),
@@ -2119,38 +2165,72 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
 /// struct.
 pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
     // Helper function to extract the column and alias from the given node and string:
-    fn extract_column_alias(n: &Node, raw: &str) -> Result<(String, Option<String>), String> {
+    fn extract_column_qualifiers(
+        n: &Node,
+        raw: &str,
+    ) -> Result<(String, Option<String>, Option<String>), String> {
+        fn get_field(n: &Option<Node>, raw: &str) -> Result<String, String> {
+            match n {
+                Some(field) => match decode(&get_from_raw(&field, raw)) {
+                    Ok(field) => Ok(field.to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+                _ => Err(format!("Unable to extract column from Node: {:?}", n)),
+            }
+        }
+
         let child_count = n.named_child_count();
-        let column;
-        let alias;
         if child_count == 1 {
-            alias = None;
-            column = match n.named_child(0) {
-                Some(child) => match decode(&get_from_raw(&child, raw)) {
-                    Ok(column) => column.to_string(),
-                    Err(e) => return Err(e.to_string()),
-                },
-                _ => return Err(format!("Unable to extract column from Node: {:?}", n)),
+            let column = match get_field(&n.named_child(0), raw) {
+                Ok(c) => c,
+                Err(e) => return Err(e),
             };
+            Ok((column, None, None))
         } else if child_count == 2 {
-            alias = match n.named_child(0) {
-                Some(child) => match decode(&get_from_raw(&child, raw)) {
-                    Ok(alias) => Some(alias.to_string()),
-                    Err(e) => return Err(e.to_string()),
-                },
-                _ => return Err(format!("Unable to extract alias from Node: {:?}", n)),
+            let first_node = match n.named_child(0) {
+                Some(n) => n,
+                None => {
+                    return Err(format!("Unable to extract 0th named child from node: {:?}", n))
+                }
             };
-            column = match n.named_child(1) {
-                Some(child) => match decode(&get_from_raw(&child, raw)) {
-                    Ok(column) => column.to_string(),
-                    Err(e) => return Err(e.to_string()),
-                },
-                _ => return Err(format!("Unable to extract column from Node: {:?}", n)),
+            if first_node.kind() == "column" {
+                let column = match get_field(&n.named_child(0), raw) {
+                    Ok(c) => c,
+                    Err(e) => return Err(e),
+                };
+                let cast = match get_field(&n.named_child(1), raw) {
+                    Ok(c) => c,
+                    Err(e) => return Err(e),
+                };
+                Ok((column, None, Some(cast)))
+            } else {
+                let alias = match get_field(&n.named_child(0), raw) {
+                    Ok(a) => a,
+                    Err(e) => return Err(e),
+                };
+                let column = match get_field(&n.named_child(1), raw) {
+                    Ok(c) => c,
+                    Err(e) => return Err(e),
+                };
+                Ok((column, Some(alias), None))
+            }
+        } else if child_count == 3 {
+            let alias = match get_field(&n.named_child(0), raw) {
+                Ok(a) => a,
+                Err(e) => return Err(e),
             };
+            let column = match get_field(&n.named_child(1), raw) {
+                Ok(c) => c,
+                Err(e) => return Err(e),
+            };
+            let cast = match get_field(&n.named_child(2), raw) {
+                Ok(c) => c,
+                Err(e) => return Err(e),
+            };
+            Ok((column, Some(alias), Some(cast)))
         } else {
             return Err("Number of child nodes in node kind: {} should be 1 or 2.".to_string());
         }
-        Ok((column, alias))
     }
 
     match query_result {
@@ -2158,11 +2238,11 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
         Ok(query) => {
             let child_count = n.named_child_count();
             for i in 0..child_count {
-                let (column, alias) = {
+                let (column, alias, cast) = {
                     match n.named_child(i) {
                         Some(child) => match decode(&get_from_raw(&child, raw)) {
-                            Ok(_) => match extract_column_alias(&child, raw) {
-                                Ok((column, alias)) => (column, alias),
+                            Ok(_) => match extract_column_qualifiers(&child, raw) {
+                                Ok((column, alias, cast)) => (column, alias, cast),
                                 Err(e) => {
                                     *query_result = Err(e.to_string());
                                     return;
@@ -2182,10 +2262,25 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
                         }
                     }
                 };
-                match alias {
-                    None => query.add_select(format!("\"{}\"", column)),
-                    Some(alias) => query
-                        .add_aliased_select(format!("\"{}\"", column), format!("\"{}\"", alias)),
+                match (alias, cast) {
+                    (None, None) => {
+                        query.add_explicit_select(format!("\"{}\"", column), None, None)
+                    }
+                    (Some(alias), None) => query.add_explicit_select(
+                        format!("\"{}\"", column),
+                        Some(format!("\"{}\"", alias)),
+                        None,
+                    ),
+                    (None, Some(cast)) => query.add_explicit_select(
+                        format!("\"{}\"", column),
+                        None,
+                        Some(cast.to_string()),
+                    ),
+                    (Some(alias), Some(cast)) => query.add_explicit_select(
+                        format!("\"{}\"", column),
+                        Some(format!("\"{}\"", alias)),
+                        Some(cast.to_string()),
+                    ),
                 };
             }
         }
@@ -2403,7 +2498,9 @@ pub fn fetch_rows_as_json_from_selects(
             Ok(sql) => {
                 if dbtype == DbType::Sqlite {
                     let mut json_keys = vec![];
-                    for (column, alias) in &select2.select {
+                    // Casting is irrelevant here. Any casting should be taken account of by the
+                    // selects_to_sql() function.
+                    for (column, alias, _cast) in &select2.select {
                         let unquoted_column = match alias {
                             Some(alias) => alias.to_string(),
                             None => unquote(&column).unwrap_or(column.clone()),
