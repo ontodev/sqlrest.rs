@@ -1065,6 +1065,20 @@ impl Window {
     }
 }
 
+/// Used to represent the count strategy when determining row counts for queries.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CountStrategy {
+    /// Count the exact number of rows returned.
+    Exact,
+    /// Use internal database tables to estimate the number of rows returned.
+    Planned,
+    /// Use exact counts up to a predefined threshold, and planned counts for anything that
+    /// exceeds the threshold.
+    Estimated,
+    /// Use a SQL window function to count the (exact) number of rows returned.
+    Window,
+}
+
 /// Given an SQL string that has been bound to the given parameter vector, construct a database
 /// query and return it.
 pub fn construct_query<'a>(
@@ -1086,11 +1100,13 @@ pub fn construct_query<'a>(
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     pub table: String,
+    // TODO: Possibly add a new struct called SelectColumn instead of specifying a tuple here.
     pub select: Vec<(String, Option<String>, Option<String>)>,
     pub filter: Vec<Filter>,
     pub window: Option<Window>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
+    // TODO: Possibly add a new struct called OrderByColumn instead of specifying a tuple here.
     pub order_by: Vec<(String, Direction)>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -1709,101 +1725,6 @@ impl Select {
     /// Default value to use for the limit parameter when querying from the web.
     pub const WEB_LIMIT_DEFAULT: usize = 20;
 
-    /// Alternative to [fetch_as_json()](Select::fetch_as_json) that uses a window function instead
-    /// of a separate query to get the number of rows corresponding to the query in the database.
-    pub fn fetch_as_json_using_window(
-        &self,
-        pool: &AnyPool,
-        param_map: &HashMap<&str, SerdeValue>,
-    ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
-        fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
-            let mut err_json = SerdeMap::new();
-            err_json.insert("status".to_string(), json!(400));
-            err_json.insert("error".to_string(), err.into());
-            err_json
-        }
-
-        let mut window_select = self.clone();
-        window_select.window("COUNT", "1", Some("count"));
-        match self.limit {
-            None => window_select.limit(Self::WEB_LIMIT_DEFAULT),
-            Some(l) => {
-                if l > Self::WEB_LIMIT_MAX {
-                    window_select.limit(Self::WEB_LIMIT_MAX)
-                } else {
-                    window_select.limit(l)
-                }
-            }
-        };
-
-        let rows = match window_select.fetch_rows_as_json(pool, param_map) {
-            Err(e) => return Err(error_status(&e)),
-            Ok(rows) => rows,
-        };
-        let count = {
-            if rows.len() < 1 {
-                // If no rows are returned it could be because the offset is too high. In that case
-                // to get the correct row count we need to use an explicit query rather than a
-                // window function:
-                match self.get_row_count(pool, param_map) {
-                    Err(e) => return Err(error_status(&e)),
-                    Ok(c) => c,
-                }
-            } else {
-                let first_row = &rows[0];
-                match first_row.get("count") {
-                    None => {
-                        return Err(error_status(&format!(
-                            "No field called 'count' found in row: {:?}",
-                            first_row
-                        )))
-                    }
-                    Some(c) => match c.as_i64() {
-                        Some(n) => n as usize,
-                        None => {
-                            return Err(error_status(&format!("Could not parse '{}' as usize", c)))
-                        }
-                    },
-                }
-            }
-        };
-        let http_status = {
-            if count > rows.len() {
-                HTTP_SUCCESS_PARTIAL_CONTENT
-            } else {
-                HTTP_SUCCESS
-            }
-        };
-
-        let mut json_object = SerdeMap::new();
-        json_object.insert("status".to_string(), json!(http_status));
-        json_object.insert("unit".to_string(), json!("items"));
-        let start = match window_select.offset {
-            None => 0,
-            Some(i) => i,
-        };
-        json_object.insert("start".to_string(), json!(start));
-        json_object.insert(
-            "end".to_string(),
-            match window_select.limit {
-                None => json!(start + Self::WEB_LIMIT_DEFAULT),
-                Some(l) => json!(start + l),
-            },
-        );
-        json_object.insert("count".to_string(), json!(count));
-        json_object.insert("rows".to_string(), {
-            let mut pruned_rows = vec![];
-            for row in &rows {
-                let mut row = row.clone();
-                row.remove("count");
-                pruned_rows.push(row);
-            }
-            pruned_rows.into()
-        });
-
-        Ok(json_object)
-    }
-
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the result as a JSON object
     /// with the following fields:
@@ -1817,7 +1738,11 @@ impl Select {
     ///               [self.limit](Select::limit) > [WEB_LIMIT_MAX](Self::WEB_LIMIT_MAX) then the
     ///               latter will be used instead.)
     ///   * `count`:  the total number of rows matching the query, irrespective of the values of
-    ///               [self.limit](Select::limit) and [self.offset](Select::offset)
+    ///               [self.limit](Select::limit) and [self.offset](Select::offset).
+    ///               Note that the `fetch_as_json()` function always returns an exact count. To
+    ///               use an alternative [CountStrategy], use the
+    ///               [fetch_as_json_with_count_strategy()](Self::fetch_as_json_with_count_strategy)
+    ///               function.
     ///   * `rows`:   the actual row records returned by the query given [self.limit](Select::limit)
     ///               and [self.offset](Select::offset), represented as a JSON array of JSON objects
     ///
@@ -1829,6 +1754,21 @@ impl Select {
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
     ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
+        self.fetch_as_json_with_count_strategy(pool, param_map, &CountStrategy::Exact)
+    }
+
+    /// Given a database connection pool, a parameter map, and a count strategy, bind this Select to
+    /// the parameter map, execute the resulting query against the database, and return the result
+    /// as a JSON object (see [fetch_as_json()](Self::fetch_as_json) for the format of the JSON
+    /// object that is returned), using the given [CountStrategy] to determine the row count.
+    pub fn fetch_as_json_with_count_strategy(
+        &self,
+        pool: &AnyPool,
+        param_map: &HashMap<&str, SerdeValue>,
+        strategy: &CountStrategy,
+    ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
+        // TODO: Currently only the CountStrategy::Window strategy is accounted for below. We also
+        // need to account for Planned and Estimated.
         fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
             let mut err_json = SerdeMap::new();
             err_json.insert("status".to_string(), json!(400));
@@ -1837,24 +1777,55 @@ impl Select {
         }
 
         let mut limited_select = self.clone();
+        if *strategy == CountStrategy::Window {
+            limited_select.window("COUNT", "1", Some("count"));
+        }
         match self.limit {
             None => limited_select.limit(Self::WEB_LIMIT_DEFAULT),
-            Some(l) => {
-                if l > Self::WEB_LIMIT_MAX {
-                    limited_select.limit(Self::WEB_LIMIT_MAX)
-                } else {
-                    limited_select.limit(l)
-                }
-            }
+            Some(l) if l > Self::WEB_LIMIT_MAX => limited_select.limit(Self::WEB_LIMIT_MAX),
+            Some(l) => limited_select.limit(l),
         };
 
         let rows = match limited_select.fetch_rows_as_json(pool, param_map) {
             Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
-        let count = match limited_select.get_row_count(pool, param_map) {
-            Err(e) => return Err(error_status(&e)),
-            Ok(count) => count,
+        let count = {
+            if !(*strategy == CountStrategy::Window) {
+                match limited_select.get_row_count(pool, param_map) {
+                    Err(e) => return Err(error_status(&e)),
+                    Ok(count) => count,
+                }
+            } else {
+                if rows.len() < 1 {
+                    // If no rows are returned it could be because the offset is too high. In that
+                    // case to get the correct row count we need to use an explicit query rather
+                    // than a window function:
+                    match self.get_row_count(pool, param_map) {
+                        Err(e) => return Err(error_status(&e)),
+                        Ok(c) => c,
+                    }
+                } else {
+                    let first_row = &rows[0];
+                    match first_row.get("count") {
+                        None => {
+                            return Err(error_status(&format!(
+                                "No field called 'count' found in row: {:?}",
+                                first_row
+                            )))
+                        }
+                        Some(c) => match c.as_i64() {
+                            Some(n) => n as usize,
+                            None => {
+                                return Err(error_status(&format!(
+                                    "Could not parse '{}' as usize",
+                                    c
+                                )))
+                            }
+                        },
+                    }
+                }
+            }
         };
         let http_status = {
             if count > rows.len() {
@@ -1880,7 +1851,19 @@ impl Select {
             },
         );
         json_object.insert("count".to_string(), json!(count));
-        json_object.insert("rows".to_string(), rows.into());
+        if !(*strategy == CountStrategy::Window) {
+            json_object.insert("rows".to_string(), rows.into());
+        } else {
+            json_object.insert("rows".to_string(), {
+                let mut pruned_rows = vec![];
+                for row in &rows {
+                    let mut row = row.clone();
+                    row.remove("count");
+                    pruned_rows.push(row);
+                }
+                pruned_rows.into()
+            });
+        }
         Ok(json_object)
     }
 }

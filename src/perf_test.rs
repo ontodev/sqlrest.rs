@@ -1,4 +1,4 @@
-use ontodev_sqlrest::{Filter, Select};
+use ontodev_sqlrest::{CountStrategy, Filter, Select};
 
 use futures::executor::block_on;
 use serde_json::json;
@@ -56,7 +56,10 @@ pub fn get_setup_sql() -> (String, String, String) {
 }
 
 pub fn time_window_select(pool: &AnyPool) {
-    println!("Checking performance of fetch_as_json_using_window() for {:?}.", pool.any_kind());
+    println!(
+        "Checking performance of fetch_as_json() with and without a window function for {:?}.",
+        pool.any_kind()
+    );
     println!("====");
     let (drop, create, insert) = get_setup_sql();
     let num_iterations = 5;
@@ -84,11 +87,16 @@ pub fn time_window_select(pool: &AnyPool) {
 
         // Time the query:
         let start = Instant::now();
-        let _rows = select.fetch_as_json_using_window(pool, &HashMap::new()).unwrap();
+        let _rows = select
+            .fetch_as_json_with_count_strategy(pool, &HashMap::new(), &CountStrategy::Window)
+            .unwrap();
         println!("Elapsed time for window fetch: {:.2?}", start.elapsed());
     }
 
-    println!("Done performance check of fetch_as_json_using_window() for {:?}.", pool.any_kind());
+    println!(
+        "Done performance check of fetch_as_json() with and without a window function for {:?}.",
+        pool.any_kind()
+    );
     println!("====");
 }
 
