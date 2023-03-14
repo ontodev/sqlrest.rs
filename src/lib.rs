@@ -1745,32 +1745,65 @@ impl Select {
         extract_rows_from_json_str(json_row)
     }
 
-    /// Given a database connection pool and a parameter map, bind this select to the parameter map,
-    /// and then fetch the number of rows that would be returned by the query.
+    /// Given a database connection pool, a parameter map, and a [CountStrategy], bind this select
+    /// to the parameter map and then fetch the number of rows that would be returned by the query
+    /// using the given strategy.
     pub fn get_row_count(
         &self,
         pool: &AnyPool,
         param_map: &HashMap<&str, SerdeValue>,
+        strategy: &CountStrategy,
     ) -> Result<usize, String> {
-        let dbtype = match get_db_type(pool) {
-            Err(e) => return Err(e),
-            Ok(dbtype) => dbtype,
-        };
-        match self.to_sql_count(&dbtype) {
-            Err(e) => return Err(e),
-            Ok(sql) => match bind_sql(pool, sql, param_map) {
+        fn exact_count(
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, String> {
+            let dbtype = match get_db_type(pool) {
                 Err(e) => return Err(e),
-                Ok((bound_sql, params)) => match construct_query(&bound_sql, &params) {
+                Ok(dbtype) => dbtype,
+            };
+            match select.to_sql_count(&dbtype) {
+                Err(e) => return Err(e),
+                Ok(sql) => match bind_sql(pool, sql, param_map) {
                     Err(e) => return Err(e),
-                    Ok(query) => match block_on(query.fetch_one(pool)) {
-                        Err(e) => return Err(e.to_string()),
-                        Ok(row) => match row.try_get::<i64, &str>("count") {
+                    Ok((bound_sql, params)) => match construct_query(&bound_sql, &params) {
+                        Err(e) => return Err(e),
+                        Ok(query) => match block_on(query.fetch_one(pool)) {
                             Err(e) => return Err(e.to_string()),
-                            Ok(count) => Ok(count as usize),
+                            Ok(row) => match row.try_get::<i64, &str>("count") {
+                                Err(e) => return Err(e.to_string()),
+                                Ok(count) => Ok(count as usize),
+                            },
                         },
                     },
                 },
-            },
+            }
+        }
+
+        fn planned_count(
+            _select: &Select,
+            _pool: &AnyPool,
+            _param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, String> {
+            todo!()
+        }
+
+        fn estimated_count(
+            _select: &Select,
+            _pool: &AnyPool,
+            _param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, String> {
+            todo!()
+        }
+
+        match strategy {
+            CountStrategy::Exact => exact_count(self, pool, param_map),
+            CountStrategy::Window => {
+                return Err("Window count strategy is not supported for get_row_count()".to_string())
+            }
+            CountStrategy::Planned => planned_count(self, pool, param_map),
+            CountStrategy::Estimated => estimated_count(self, pool, param_map),
         }
     }
     /// Maximum allowable value of [Select::limit] when querying from the web.
@@ -1827,19 +1860,6 @@ impl Select {
             err_json
         }
 
-        // TODO: Instead of having all of this counting logic here, why not change the signature
-        // of the get_row_count() function to also accept a CountStrategy and handle it there.
-        fn exact_count(
-            select: &Select,
-            pool: &AnyPool,
-            param_map: &HashMap<&str, SerdeValue>,
-        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
-            match select.get_row_count(pool, param_map) {
-                Err(e) => return Err(error_status(&e)),
-                Ok(c) => Ok(c),
-            }
-        }
-
         fn window_count(
             rows: &Vec<SerdeMap<String, SerdeValue>>,
         ) -> Result<usize, SerdeMap<String, SerdeValue>> {
@@ -1858,22 +1878,6 @@ impl Select {
             }
         }
 
-        fn planned_count(
-            select: &Select,
-            pool: &AnyPool,
-            param_map: &HashMap<&str, SerdeValue>,
-        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
-            todo!()
-        }
-
-        fn estimated_count(
-            select: &Select,
-            pool: &AnyPool,
-            param_map: &HashMap<&str, SerdeValue>,
-        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
-            todo!()
-        }
-
         let mut limited_select = self.clone();
         if *strategy == CountStrategy::Window {
             limited_select.window("COUNT", "1", Some("count"));
@@ -1889,25 +1893,14 @@ impl Select {
             Ok(rows) => rows,
         };
         let count = match *strategy {
-            // Note that CountStrategy::Window will not work when no rows are returned so in that
-            // case we must fall back to CountStrategy::Exact.
+            // Note that CountStrategy::Window will not work when no rows are returned.
             CountStrategy::Window if rows.len() > 0 => match window_count(&rows) {
                 Err(e) => return Err(e),
                 Ok(count) => count,
             },
-            CountStrategy::Window | CountStrategy::Exact => {
-                match exact_count(&limited_select, pool, param_map) {
-                    Err(e) => return Err(e),
-                    Ok(count) => count,
-                }
-            }
-            CountStrategy::Planned => match planned_count(&limited_select, pool, param_map) {
-                Err(e) => return Err(e),
-                Ok(count) => count,
-            },
-            CountStrategy::Estimated => match estimated_count(&limited_select, pool, param_map) {
-                Err(e) => return Err(e),
-                Ok(count) => count,
+            _ => match limited_select.get_row_count(pool, param_map, strategy) {
+                Err(e) => return Err(error_status(&e)),
+                Ok(c) => c,
             },
         };
         let http_status = {
