@@ -7,7 +7,7 @@
 //! use ontodev_sqlrest::{
 //!     bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
 //!     fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
-//!     Filter, Select, selects_to_sql,
+//!     Filter, Select, SelectColumn, selects_to_sql,
 //! };
 //! use futures::executor::block_on;
 //! use indoc::indoc;
@@ -150,10 +150,11 @@
 //!  */
 //! # let (sqlite_pool, postgresql_pool) = setup_for_select_test();
 //! let mut select = Select::new(r#""a table name with spaces""#);
-//! select.explicit_select(vec![("foo", Some("foo"), None),
-//!                             (r#""a column name with spaces""#, Some("C"), None)]);
+//! select.explicit_select(vec![
+//!     &SelectColumn::new("foo", Some("foo"), None),
+//!     &SelectColumn::new(r#""a column name with spaces""#, Some("C"), None)]);
 //! select.add_select("bar");
-//! select.add_explicit_select("COUNT(1)", Some("count"), None);
+//! select.add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None));
 //! select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 //! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 //! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
@@ -294,7 +295,7 @@
 //! let mut select = Select::new(r#""a table name with spaces""#);
 //! select
 //!     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
-//!     .add_explicit_select("COUNT(1)", Some("count"), None)
+//!     .add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None))
 //!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
 //!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
 //!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
@@ -1065,6 +1066,49 @@ impl Window {
     }
 }
 
+/// Representation of a column expression in a SELECT clause, with optional alias and cast.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SelectColumn {
+    pub expression: String,
+    pub alias: Option<String>,
+    pub cast: Option<String>,
+}
+
+impl SelectColumn {
+    /// Given an expression and optionally an alias and/or a cast, create a new SelectColumn struct.
+    pub fn new<S: Into<String>>(expression: S, alias: Option<S>, cast: Option<S>) -> SelectColumn {
+        let mut select_col = SelectColumn { expression: expression.into(), ..Default::default() };
+        if let Some(alias) = alias {
+            select_col.alias = Some(alias.into());
+        }
+        if let Some(cast) = cast {
+            select_col.cast = Some(cast.into());
+        }
+        select_col
+    }
+
+    /// Clone the given SelectColumn.
+    pub fn clone(select_column: &SelectColumn) -> SelectColumn {
+        SelectColumn { ..select_column.clone() }
+    }
+
+    /// Convert the given window into an SQL string suitable to be used in a SELECT clause.
+    pub fn to_sql(&self, dbtype: &DbType) -> String {
+        let mut sql = quote_if_whitespace(&self.expression);
+        if let Some(cast) = &self.cast {
+            let cast = cast.to_uppercase();
+            match *dbtype {
+                DbType::Postgres => sql = format!("{}::{}", sql, cast),
+                DbType::Sqlite => sql = format!("CAST({} AS {})", sql, cast),
+            };
+        }
+        if let Some(alias) = &self.alias {
+            sql.push_str(&format!(" AS {}", quote_if_whitespace(&alias)));
+        }
+        sql
+    }
+}
+
 /// Used to represent the count strategy when determining row counts for queries.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CountStrategy {
@@ -1100,13 +1144,11 @@ pub fn construct_query<'a>(
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Select {
     pub table: String,
-    // TODO: Possibly add a new struct called SelectColumn instead of specifying a tuple here.
-    pub select: Vec<(String, Option<String>, Option<String>)>,
+    pub select: Vec<SelectColumn>,
     pub filter: Vec<Filter>,
     pub window: Option<Window>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
-    // TODO: Possibly add a new struct called OrderByColumn instead of specifying a tuple here.
     pub order_by: Vec<(String, Direction)>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -1135,7 +1177,7 @@ impl Select {
     pub fn select<S: Into<String>>(&mut self, select: Vec<S>) -> &mut Select {
         self.select.clear();
         for s in select {
-            self.select.push((s.into(), None, None));
+            self.select.push(SelectColumn::new(s.into(), None, None));
         }
         self
     }
@@ -1143,48 +1185,24 @@ impl Select {
     /// Given a vector of tuples such that the first place of each tuple is a column expression
     /// and the second place is an alias for that expression, replace the current contents of
     /// `self.select` with the contents of the given vector.
-    pub fn explicit_select<S: Into<String>>(
-        &mut self,
-        select: Vec<(S, Option<S>, Option<S>)>,
-    ) -> &mut Select {
+    pub fn explicit_select(&mut self, select: Vec<&SelectColumn>) -> &mut Select {
         self.select.clear();
-        for (column, alias, cast) in select {
-            let alias = match alias {
-                Some(a) => Some(a.into()),
-                None => None,
-            };
-            let cast = match cast {
-                Some(c) => Some(c.into()),
-                None => None,
-            };
-            self.add_explicit_select(column.into(), alias, cast);
+        for select_column in select {
+            self.add_explicit_select(select_column);
         }
         self
     }
 
     /// Given a column expression, add it to the vector, `self.select` without an alias.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
-        self.select.push((select.into(), None, None));
+        self.select.push(SelectColumn::new(select.into(), None, None));
         self
     }
 
     /// Given a column expression and an alias for that expression, add the tuple (column, alias) to
     /// the vector, `self.select`.
-    pub fn add_explicit_select<S: Into<String>>(
-        &mut self,
-        column: S,
-        alias: Option<S>,
-        cast: Option<S>,
-    ) -> &mut Select {
-        let alias = match alias {
-            Some(a) => Some(a.into()),
-            None => None,
-        };
-        let cast = match cast {
-            Some(c) => Some(c.into()),
-            None => None,
-        };
-        self.select.push((column.into(), alias, cast));
+    pub fn add_explicit_select(&mut self, select_column: &SelectColumn) -> &mut Select {
+        self.select.push(select_column.clone());
         self
     }
 
@@ -1311,7 +1329,7 @@ impl Select {
             Ok(rows) => {
                 for row in &rows {
                     let cname: &str = row.get("name");
-                    self.add_explicit_select(format!(r#""{}""#, cname), None, None);
+                    self.add_select(format!(r#""{}""#, cname));
                 }
             }
             Err(e) => return Err(e.to_string()),
@@ -1333,19 +1351,8 @@ impl Select {
             select_clause = String::from("*");
         } else {
             let mut select_columns = vec![];
-            for (column, alias, cast) in &self.select {
-                let mut clause = quote_if_whitespace(&column);
-                if let Some(cast) = cast {
-                    let cast = cast.to_uppercase();
-                    match *dbtype {
-                        DbType::Postgres => clause = format!("{}::{}", clause, cast),
-                        DbType::Sqlite => clause = format!("CAST({} AS {})", clause, cast),
-                    };
-                }
-                if let Some(alias) = alias {
-                    clause.push_str(&format!(" AS {}", quote_if_whitespace(&alias)));
-                }
-                select_columns.push(clause);
+            for select_column in &self.select {
+                select_columns.push(select_column.to_sql(dbtype));
             }
             select_clause = select_columns.join(", ");
         }
@@ -1480,14 +1487,17 @@ impl Select {
         let mut params = vec![];
         if self.select.len() > 0 {
             let mut parts = vec![];
-            for (column, alias, cast) in &self.select {
-                let column = unquote(column).unwrap_or(column.to_string());
+            for select_column in &self.select {
+                let column = &select_column.expression;
+                let alias = &select_column.alias;
+                let cast = &select_column.cast;
+                let column = unquote(&column).unwrap_or(column.to_string());
                 if let Err(e) = is_simple(&column) {
                     return Err(e.to_string());
                 }
                 let mut part = String::from("");
                 if let Some(alias) = alias {
-                    let alias = unquote(alias).unwrap_or(alias.to_string());
+                    let alias = unquote(&alias).unwrap_or(alias.to_string());
                     if let Err(e) = is_simple(&alias) {
                         return Err(e.to_string());
                     }
@@ -1617,12 +1627,14 @@ impl Select {
             sql
         } else if dbtype == DbType::Sqlite {
             let mut json_keys = vec![];
-            // Casting is irrelevant here. If there are any casts they will have been taken account
-            // of in the to_sql() function.
-            for (column, alias, _cast) in &self.select {
+            for select_column in &self.select {
+                // The `select_column.cast` field is not used here, since if there are any casts
+                // they will have been taken account of in the to_sql() function above.
+                let column = &select_column.expression;
+                let alias = &select_column.alias;
                 let unquoted_column = match alias {
                     Some(alias) => alias.to_string(),
-                    None => unquote(&column).unwrap_or(column.clone()),
+                    None => unquote(&column).unwrap_or(column.to_string()),
                 };
                 json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
             }
@@ -2245,26 +2257,14 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
                         }
                     }
                 };
-                match (alias, cast) {
-                    (None, None) => {
-                        query.add_explicit_select(format!("\"{}\"", column), None, None)
-                    }
-                    (Some(alias), None) => query.add_explicit_select(
-                        format!("\"{}\"", column),
-                        Some(format!("\"{}\"", alias)),
-                        None,
-                    ),
-                    (None, Some(cast)) => query.add_explicit_select(
-                        format!("\"{}\"", column),
-                        None,
-                        Some(cast.to_string()),
-                    ),
-                    (Some(alias), Some(cast)) => query.add_explicit_select(
-                        format!("\"{}\"", column),
-                        Some(format!("\"{}\"", alias)),
-                        Some(cast.to_string()),
-                    ),
-                };
+                let mut select_column = SelectColumn::new(format!("\"{}\"", column), None, None);
+                if let Some(alias) = alias {
+                    select_column.alias = Some(format!("\"{}\"", alias));
+                }
+                if let Some(cast) = cast {
+                    select_column.cast = Some(cast);
+                }
+                query.add_explicit_select(&select_column);
             }
         }
     }
@@ -2483,10 +2483,12 @@ pub fn fetch_rows_as_json_from_selects(
                     let mut json_keys = vec![];
                     // Casting is irrelevant here. Any casting should be taken account of by the
                     // selects_to_sql() function.
-                    for (column, alias, _cast) in &select2.select {
+                    for select_column in &select2.select {
+                        let column = &select_column.expression;
+                        let alias = &select_column.alias;
                         let unquoted_column = match alias {
                             Some(alias) => alias.to_string(),
-                            None => unquote(&column).unwrap_or(column.clone()),
+                            None => unquote(&column).unwrap_or(column.to_string()),
                         };
                         json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
                     }
@@ -2879,4 +2881,6 @@ mod tests {
             ),
         }
     }
+
+    // TODO: Add test cases for the different count strategies here. Or maybe doctests instead.
 }

@@ -9,7 +9,7 @@
 use ontodev_sqlrest::{
     bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
     fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
-    Filter, Select, selects_to_sql,
+    Filter, Select, SelectColumn, selects_to_sql,
 };
 use futures::executor::block_on;
 use indoc::indoc;
@@ -71,10 +71,11 @@ let row = block_on(test_query.fetch_one(pool)).unwrap();
  * Create a new Select struct by calling new() and progressively adding fields.
  */
 let mut select = Select::new(r#""a table name with spaces""#);
-select.explicit_select(vec![("foo", Some("foo"), None),
-                            (r#""a column name with spaces""#, Some("C"), None)]);
+select.explicit_select(vec![
+    &SelectColumn::new("foo", Some("foo"), None),
+    &SelectColumn::new(r#""a column name with spaces""#, Some("C"), None)]);
 select.add_select("bar");
-select.add_explicit_select("COUNT(1)", Some("count"), None);
+select.add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None));
 select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
 select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
@@ -188,7 +189,7 @@ let postgresql_rows = select.fetch_rows(&postgresql_pool, &param_map).unwrap();
 let mut select = Select::new(r#""a table name with spaces""#);
 select
     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
-    .add_explicit_select("COUNT(1)", Some("count"), None)
+    .add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None))
     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
