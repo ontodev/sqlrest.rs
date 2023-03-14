@@ -1820,13 +1820,58 @@ impl Select {
         param_map: &HashMap<&str, SerdeValue>,
         strategy: &CountStrategy,
     ) -> Result<SerdeMap<String, SerdeValue>, SerdeMap<String, SerdeValue>> {
-        // TODO: Currently only the CountStrategy::Window strategy is accounted for below. We also
-        // need to account for Planned and Estimated.
         fn error_status(err: &str) -> SerdeMap<String, SerdeValue> {
             let mut err_json = SerdeMap::new();
             err_json.insert("status".to_string(), json!(400));
             err_json.insert("error".to_string(), err.into());
             err_json
+        }
+
+        // TODO: Instead of having all of this counting logic here, why not change the signature
+        // of the get_row_count() function to also accept a CountStrategy and handle it there.
+        fn exact_count(
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
+            match select.get_row_count(pool, param_map) {
+                Err(e) => return Err(error_status(&e)),
+                Ok(c) => Ok(c),
+            }
+        }
+
+        fn window_count(
+            rows: &Vec<SerdeMap<String, SerdeValue>>,
+        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
+            let first_row = &rows[0];
+            match first_row.get("count") {
+                None => {
+                    return Err(error_status(&format!(
+                        "No field called 'count' found in row: {:?}",
+                        first_row
+                    )))
+                }
+                Some(c) => match c.as_i64() {
+                    Some(n) => Ok(n as usize),
+                    None => return Err(error_status(&format!("Could not parse '{}' as usize", c))),
+                },
+            }
+        }
+
+        fn planned_count(
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
+            todo!()
+        }
+
+        fn estimated_count(
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
+        ) -> Result<usize, SerdeMap<String, SerdeValue>> {
+            todo!()
         }
 
         let mut limited_select = self.clone();
@@ -1843,42 +1888,27 @@ impl Select {
             Err(e) => return Err(error_status(&e)),
             Ok(rows) => rows,
         };
-        let count = {
-            if !(*strategy == CountStrategy::Window) {
-                match limited_select.get_row_count(pool, param_map) {
-                    Err(e) => return Err(error_status(&e)),
+        let count = match *strategy {
+            // Note that CountStrategy::Window will not work when no rows are returned so in that
+            // case we must fall back to CountStrategy::Exact.
+            CountStrategy::Window if rows.len() > 0 => match window_count(&rows) {
+                Err(e) => return Err(e),
+                Ok(count) => count,
+            },
+            CountStrategy::Window | CountStrategy::Exact => {
+                match exact_count(&limited_select, pool, param_map) {
+                    Err(e) => return Err(e),
                     Ok(count) => count,
                 }
-            } else {
-                if rows.len() < 1 {
-                    // If no rows are returned it could be because the offset is too high. In that
-                    // case to get the correct row count we need to use an explicit query rather
-                    // than a window function:
-                    match self.get_row_count(pool, param_map) {
-                        Err(e) => return Err(error_status(&e)),
-                        Ok(c) => c,
-                    }
-                } else {
-                    let first_row = &rows[0];
-                    match first_row.get("count") {
-                        None => {
-                            return Err(error_status(&format!(
-                                "No field called 'count' found in row: {:?}",
-                                first_row
-                            )))
-                        }
-                        Some(c) => match c.as_i64() {
-                            Some(n) => n as usize,
-                            None => {
-                                return Err(error_status(&format!(
-                                    "Could not parse '{}' as usize",
-                                    c
-                                )))
-                            }
-                        },
-                    }
-                }
             }
+            CountStrategy::Planned => match planned_count(&limited_select, pool, param_map) {
+                Err(e) => return Err(e),
+                Ok(count) => count,
+            },
+            CountStrategy::Estimated => match estimated_count(&limited_select, pool, param_map) {
+                Err(e) => return Err(e),
+                Ok(count) => count,
+            },
         };
         let http_status = {
             if count > rows.len() {
