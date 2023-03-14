@@ -7,7 +7,7 @@
 //! use ontodev_sqlrest::{
 //!     bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
 //!     fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
-//!     Filter, Select, SelectColumn, selects_to_sql,
+//!     Filter, OrderByColumn, Select, SelectColumn, selects_to_sql,
 //! };
 //! use futures::executor::block_on;
 //! use indoc::indoc;
@@ -157,7 +157,7 @@
 //! select.add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None));
 //! select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 //! select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
-//! select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
+//! select.order_by(vec!["foo", "bar"]);
 //! select.group_by(vec!["foo"]);
 //! select.add_group_by("C");
 //! select.add_group_by("bar");
@@ -190,7 +190,7 @@
 //!          WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
 //!          GROUP BY foo, C, bar \
 //!          HAVING COUNT(1) > 1 \
-//!          ORDER BY foo ASC, bar DESC \
+//!          ORDER BY foo ASC, bar ASC \
 //!          LIMIT 11 OFFSET 50",
 //!         expected_is_clause,
 //!     );
@@ -209,7 +209,7 @@
 //!          WHERE foo {} {} AND bar IN ({}, {}) \
 //!          GROUP BY foo, C, bar \
 //!          HAVING COUNT(1) > 1 \
-//!          ORDER BY foo ASC, bar DESC \
+//!          ORDER BY foo ASC, bar ASC \
 //!          LIMIT 11 OFFSET 50",
 //!         expected_is_clause, placeholder1, placeholder2, placeholder3,
 //!     );
@@ -278,7 +278,7 @@
 //!     .select_all(&sqlite_pool)
 //!     .expect("")
 //!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-//!     .order_by(vec![("foo", Direction::Descending)]);
+//!     .explicit_order_by(vec![&OrderByColumn::new("foo", &Direction::Descending)]);
 //!
 //! let mut param_map = HashMap::new();
 //! param_map.insert("foo1", json!("f5"));
@@ -297,7 +297,8 @@
 //!     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
 //!     .add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None))
 //!     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-//!     .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+//!     .explicit_order_by(vec![&OrderByColumn::new("foo", &Direction::Ascending),
+//!                             &OrderByColumn::new("bar", &Direction::Descending)])
 //!     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
 //!     .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
 //!     .limit(10)
@@ -329,7 +330,7 @@
 //!     .select(vec!["prefix"])
 //!     .limit(10)
 //!     .offset(0)
-//!     .add_order_by(("prefix", Direction::Ascending));
+//!     .add_explicit_order_by(&OrderByColumn::new("prefix", &Direction::Ascending));
 //! for pool in vec![sqlite_pool, postgresql_pool] {
 //!     let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
 //! #     for (i, row) in rows.iter().enumerate() {
@@ -348,7 +349,7 @@
 //!     .select(vec!["prefix"])
 //!     .limit(10)
 //!     .offset(0)
-//!     .add_order_by(("prefix", Direction::Ascending));
+//!     .add_explicit_order_by(&OrderByColumn::new("prefix", &Direction::Ascending));
 //! for pool in vec![sqlite_pool, postgresql_pool] {
 //!     let json_rows =
 //!         fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
@@ -1109,6 +1110,30 @@ impl SelectColumn {
     }
 }
 
+/// Representation of a column expression in an ORDER BY clause
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrderByColumn {
+    pub column: String,
+    pub direction: Direction,
+}
+
+impl OrderByColumn {
+    /// Given a column and a direction, create a new OrderByColumn struct.
+    pub fn new<S: Into<String>>(column: S, direction: &Direction) -> OrderByColumn {
+        OrderByColumn { column: column.into(), direction: direction.clone() }
+    }
+
+    /// Clone the given OrderByColumn
+    pub fn clone(order_by_column: &OrderByColumn) -> OrderByColumn {
+        OrderByColumn { ..order_by_column.clone() }
+    }
+
+    /// Convert the given OrderByColumn into an SQL string suitable for use in an OEDER BY clause.
+    pub fn to_sql(&self) -> String {
+        format!("{} {}", quote_if_whitespace(&self.column), self.direction.to_sql())
+    }
+}
+
 /// Used to represent the count strategy when determining row counts for queries.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CountStrategy {
@@ -1149,7 +1174,7 @@ pub struct Select {
     pub window: Option<Window>,
     pub group_by: Vec<String>,
     pub having: Vec<Filter>,
-    pub order_by: Vec<(String, Direction)>,
+    pub order_by: Vec<OrderByColumn>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -1267,19 +1292,38 @@ impl Select {
     }
 
     /// Given a vector of column names, replace the current contents of `self.order_by` with the
-    /// contents of the given vector.
-    pub fn order_by<S: Into<String>>(&mut self, order_by: Vec<(S, Direction)>) -> &mut Select {
+    /// contents of the given vector, such that the direction of each order by clause is
+    /// [Direction::Ascending].
+    pub fn order_by<S: Into<String>>(&mut self, order_by: Vec<S>) -> &mut Select {
         self.order_by.clear();
-        for (s, d) in order_by {
-            self.order_by.push((s.into(), d));
+        for column in order_by {
+            let clause = OrderByColumn::new(column.into(), &Direction::Ascending);
+            self.order_by.push(clause);
         }
         self
     }
 
-    /// Given a column name, add it to the vector, `self.order_by`.
-    pub fn add_order_by<S: Into<String>>(&mut self, order_by: (S, Direction)) -> &mut Select {
-        let (column, direction) = order_by;
-        self.order_by.push((column.into(), direction));
+    /// Given a vector of [OrderByColumn] structs, replace the current contents of `self.order_by`
+    /// with the contents of the given vector.
+    pub fn explicit_order_by(&mut self, order_by: Vec<&OrderByColumn>) -> &mut Select {
+        self.order_by.clear();
+        for order_by_column in order_by {
+            self.order_by.push(order_by_column.clone());
+        }
+        self
+    }
+
+    /// Given a column name, add it to the vector, `self.order_by` with the direction
+    /// [Direction::Ascending].
+    pub fn add_order_by<S: Into<String>>(&mut self, column: S) -> &mut Select {
+        let clause = OrderByColumn::new(column.into(), &Direction::Ascending);
+        self.order_by.push(clause);
+        self
+    }
+
+    /// Given an [OrderByStruct], add it to the vector `self.order_by`.
+    pub fn add_explicit_order_by(&mut self, order_by: &OrderByColumn) -> &mut Select {
+        self.order_by.push(order_by.clone());
         self
     }
 
@@ -1381,11 +1425,7 @@ impl Select {
         }
         if !self.order_by.is_empty() {
             sql.push_str(" ORDER BY ");
-            let order_strings = self
-                .order_by
-                .iter()
-                .map(|(col, dir)| format!("{} {}", quote_if_whitespace(&col), dir.to_sql()))
-                .collect::<Vec<String>>();
+            let order_strings = self.order_by.iter().map(|o| o.to_sql()).collect::<Vec<String>>();
             sql.push_str(&format!("{}", order_strings.join(", ")));
         }
         if let Some(limit) = self.limit {
@@ -1575,12 +1615,13 @@ impl Select {
         }
         if self.order_by.len() > 0 {
             let mut parts = vec![];
-            for (column, direction) in &self.order_by {
-                let column = unquote(column).unwrap_or(column.to_string());
+            for order_by_column in &self.order_by {
+                let column = &order_by_column.column;
+                let column = unquote(&column).unwrap_or(column.to_string());
                 if let Err(e) = is_simple(&column) {
                     return Err(format!("While reading ORDER BY field, got error: {}", e));
                 }
-                let direction = direction.to_url();
+                let direction = order_by_column.direction.to_url();
                 parts.push(format!("{}.{}", column, direction));
             }
             params.push(format!("order={}", parts.join(",")));
@@ -2318,8 +2359,8 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     match ordering {
                         Ok(o) => {
                             position = position + 1;
-                            let order = (format!("\"{}\"", column), o);
-                            query.add_order_by(order);
+                            let order = OrderByColumn::new(format!("\"{}\"", column), &o);
+                            query.add_explicit_order_by(&order);
                         }
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2328,8 +2369,8 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     };
                 } else {
                     let ordering = Direction::Ascending; //default ordering is ASC
-                    let order = (format!("\"{}\"", column), ordering);
-                    query.add_order_by(order);
+                    let order = OrderByColumn::new(format!("\"{}\"", column), &ordering);
+                    query.add_explicit_order_by(&order);
                 }
             }
         }
@@ -2844,7 +2885,7 @@ mod tests {
         }
         select.filter.clear();
 
-        select.add_order_by(("Kluge$foo", Direction::Ascending));
+        select.add_explicit_order_by(&OrderByColumn::new("Kluge$foo", &Direction::Ascending));
         if let Ok(_) = select.to_url() {
             return;
         }

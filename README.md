@@ -9,7 +9,7 @@
 use ontodev_sqlrest::{
     bind_sql, construct_query, get_db_type, fetch_rows_from_selects,
     fetch_rows_as_json_from_selects, interpolate_sql, local_sql_syntax, DbType, Direction,
-    Filter, Select, SelectColumn, selects_to_sql,
+    Filter, OrderByColumn, Select, SelectColumn, selects_to_sql,
 };
 use futures::executor::block_on;
 use indoc::indoc;
@@ -78,7 +78,7 @@ select.add_select("bar");
 select.add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None));
 select.filter(vec![Filter::new("foo", "is", json!("{foo}")).unwrap()]);
 select.add_filter(Filter::new("bar", "in", json!(["{val1}", "{val2}"])).unwrap());
-select.order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)]);
+select.order_by(vec!["foo", "bar"]);
 select.group_by(vec!["foo"]);
 select.add_group_by("C");
 select.add_group_by("bar");
@@ -111,7 +111,7 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
          WHERE foo {} {{foo}} AND bar IN ({{val1}}, {{val2}}) \
          GROUP BY foo, C, bar \
          HAVING COUNT(1) > 1 \
-         ORDER BY foo ASC, bar DESC \
+         ORDER BY foo ASC, bar ASC \
          LIMIT 11 OFFSET 50",
         expected_is_clause,
     );
@@ -130,7 +130,7 @@ for pool in vec![&postgresql_pool, &sqlite_pool] {
          WHERE foo {} {} AND bar IN ({}, {}) \
          GROUP BY foo, C, bar \
          HAVING COUNT(1) > 1 \
-         ORDER BY foo ASC, bar DESC \
+         ORDER BY foo ASC, bar ASC \
          LIMIT 11 OFFSET 50",
         expected_is_clause, placeholder1, placeholder2, placeholder3,
     );
@@ -175,7 +175,7 @@ select
     .select_all(&sqlite_pool)
     .expect("")
     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-    .order_by(vec![("foo", Direction::Descending)]);
+    .explicit_order_by(vec![&OrderByColumn::new("foo", &Direction::Descending)]);
 
 let mut param_map = HashMap::new();
 param_map.insert("foo1", json!("f5"));
@@ -191,7 +191,8 @@ select
     .select(vec!["foo", r#""a column name with spaces""#, "bar"])
     .add_explicit_select(&SelectColumn::new("COUNT(1)", Some("count"), None))
     .filter(vec![Filter::new("foo", "not_in", json!(["{foo1}", "{foo2}"])).unwrap()])
-    .order_by(vec![("foo", Direction::Ascending), ("bar", Direction::Descending)])
+    .explicit_order_by(vec![&OrderByColumn::new("foo", &Direction::Ascending),
+                            &OrderByColumn::new("bar", &Direction::Descending)])
     .group_by(vec!["foo", r#""a column name with spaces""#, "bar"])
     .having(vec![Filter::new("COUNT(1)", "gte", json!(1)).unwrap()])
     .limit(10)
@@ -213,7 +214,7 @@ main_select
     .select(vec!["prefix"])
     .limit(10)
     .offset(0)
-    .add_order_by(("prefix", Direction::Ascending));
+    .add_explicit_order_by(&OrderByColumn::new("prefix", &Direction::Ascending));
 for pool in vec![sqlite_pool, postgresql_pool] {
     let rows = fetch_rows_from_selects(&cte, &main_select, &pool, &HashMap::new()).unwrap();
 }
@@ -227,7 +228,7 @@ main_select
     .select(vec!["prefix"])
     .limit(10)
     .offset(0)
-    .add_order_by(("prefix", Direction::Ascending));
+    .add_explicit_order_by(&OrderByColumn::new("prefix", &Direction::Ascending));
 for pool in vec![sqlite_pool, postgresql_pool] {
     let json_rows =
         fetch_rows_as_json_from_selects(&cte, &main_select, &pool, &HashMap::new())
