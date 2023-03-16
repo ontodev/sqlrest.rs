@@ -355,6 +355,14 @@ assert_eq!(expected_sql, select.to_sqlite().unwrap());
 assert_eq!(expected_sql, select.to_postgres().unwrap());
 assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 
+// Wildcards in LIKE clauses are indicated using '*'.
+let from_url = "bar?foo=like.*yogi*";
+let expected_sql = "SELECT * FROM \"bar\" WHERE \"foo\" LIKE '%yogi%'";
+let select = parse(from_url).unwrap();
+assert_eq!(expected_sql, select.to_sqlite().unwrap());
+assert_eq!(expected_sql, select.to_postgres().unwrap());
+assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+
 // Quotes are not allowed in column names in URLs.
 let from_url = "bar?\"column 1\"=eq.5";
 let result = parse(from_url);

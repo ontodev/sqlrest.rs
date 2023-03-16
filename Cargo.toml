@@ -22,4 +22,4 @@ urlencoding = "2.1.2"
 [dependencies.tree-sitter-sqlrest]
 # path = "../tree-sitter-sqlrest"
 git = "https://github.com/ontodev/tree-sitter-sqlrest"
-rev = "59450f553f316b79eb9750b974ca0acca1632d6a"
+rev = "8e76edac222d0054708a838b4124104ea8d8c45c"

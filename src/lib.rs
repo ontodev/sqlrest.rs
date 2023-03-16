@@ -487,6 +487,14 @@
 //! assert_eq!(expected_sql, select.to_postgres().unwrap());
 //! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //!
+//! // Wildcards in LIKE clauses are indicated using '*'.
+//! let from_url = "bar?foo=like.*yogi*";
+//! let expected_sql = "SELECT * FROM \"bar\" WHERE \"foo\" LIKE '%yogi%'";
+//! let select = parse(from_url).unwrap();
+//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
+//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+//!
 //! // Quotes are not allowed in column names in URLs.
 //! let from_url = "bar?\"column 1\"=eq.5";
 //! let result = parse(from_url);
@@ -1501,11 +1509,20 @@ impl Select {
             return Err("Window functions are not supported in to_url()".to_string());
         }
 
-        // Helper function to surround any 'special' strings with double-quotes. These include
-        // strings composed entirely of numeric symbols, as well as strings containing one of the
-        // special reserved characters (see the static ref RESERVED defined above).
-        fn quote_special(token: &str) -> String {
-            let token = unquote(&token).unwrap_or(token.to_string());
+        // Helper function to handle values that are strings. We: (i) replace any instances of '%'
+        // with '*' in LIKE clauses, (ii) surround the value with double-quotes if it is composed
+        // entirely of numeric symbols, or if it contains one of the special reserved characters
+        // (see the static ref RESERVED defined above).
+        fn handle_string_value(token: &str, operator: &Operator) -> String {
+            let token = {
+                let t = unquote(&token).unwrap_or(token.to_string());
+                match operator {
+                    Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
+                        t.replace("%", "*")
+                    }
+                    _ => t,
+                }
+            };
             if token.chars().all(char::is_numeric) || RESERVED.iter().any(|&c| token.contains(c)) {
                 format!("\"{}\"", token)
             } else {
@@ -1564,14 +1581,14 @@ impl Select {
         if self.filter.len() > 0 {
             for filter in &self.filter {
                 let rhs = match &filter.rhs {
-                    SerdeValue::String(s) => quote_special(&s),
+                    SerdeValue::String(s) => handle_string_value(&s, &filter.operator),
                     SerdeValue::Number(n) => format!("{}", n),
                     SerdeValue::Array(v) => {
                         let mut list = vec![];
                         for item in v {
                             match item {
                                 SerdeValue::String(s) => {
-                                    list.push(quote_special(&s));
+                                    list.push(handle_string_value(&s, &filter.operator));
                                 }
                                 SerdeValue::Number(n) => list.push(n.to_string()),
                                 _ => {
@@ -2150,7 +2167,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
                 }
             };
             let value = {
-                if value_node.kind() != "value" {
+                if value_node.kind() != "normal_value" && value_node.kind() != "like_value" {
                     *query_result = Err(format!("Unexpected Node kind: {}", value_node.kind()));
                     return;
                 } else {
@@ -2170,6 +2187,14 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
                                     } else {
                                         let unquoted_value =
                                             unquote(&value).unwrap_or(value.to_string());
+                                        let unquoted_value = {
+                                            if value_node.kind() == "like_value" {
+                                                // '*' in a URL is interpreted as '%' for LIKE:
+                                                unquoted_value.replace("*", "%")
+                                            } else {
+                                                unquoted_value
+                                            }
+                                        };
                                         json!(format!("'{}'", unquoted_value))
                                     }
                                 }
@@ -3042,5 +3067,13 @@ mod tests {
             .unwrap();
         let row_count = result_map.get("count").unwrap();
         assert_eq!(row_count.as_u64().unwrap(), 4);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_false_star() {
+        // Wildcards ('*') are only allowed in LIKE clauses, so this should fail:
+        let from_url = "bar?foo=eq.*yogi*";
+        parse(from_url).unwrap();
     }
 }
