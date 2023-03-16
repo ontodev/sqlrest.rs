@@ -1455,6 +1455,8 @@ impl Select {
     /// specified.
     pub fn to_sql_count(&self, dbtype: &DbType) -> Result<String, String> {
         let mut count_select = self.clone();
+        // We would like to see the number of rows that would be returned if not for the limit
+        // and offset clauses, and the order by clause is irrelevant for counting:
         count_select.order_by.clear();
         count_select.limit = None;
         count_select.offset = None;
@@ -1747,7 +1749,8 @@ impl Select {
 
     /// Given a database connection pool, a parameter map, and a [CountStrategy], bind this select
     /// to the parameter map and then fetch the number of rows that would be returned by the query
-    /// using the given strategy.
+    /// using the given strategy. Note that [CountStrategy::Window] is not supported by this
+    /// function.
     pub fn get_row_count(
         &self,
         pool: &AnyPool,
@@ -1782,11 +1785,53 @@ impl Select {
         }
 
         fn planned_count(
-            _select: &Select,
-            _pool: &AnyPool,
-            _param_map: &HashMap<&str, SerdeValue>,
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
         ) -> Result<usize, String> {
-            todo!()
+            let mut select = select.clone();
+            // We would like to see the number of rows that would be returned if not for the limit
+            // and offset clauses, and the order by clause is irrelevant for counting:
+            select.order_by.clear();
+            select.limit = None;
+            select.offset = None;
+
+            if pool.any_kind() == AnyKind::Sqlite {
+                // Planned count information is not available in SQLite, so we fallback to the exact
+                // count:
+                return exact_count(&select, pool, param_map);
+            } else {
+                // See https://wiki.postgresql.org/wiki/Count_estimate
+                let explain_rows = match select.to_postgres() {
+                    Err(e) => return Err(e),
+                    Ok(sql) => match bind_sql(pool, sql, param_map) {
+                        Err(e) => return Err(e),
+                        Ok((bound_sql, params)) => {
+                            match construct_query(&format!("EXPLAIN {}", bound_sql), &params) {
+                                Err(e) => return Err(e),
+                                Ok(query) => match block_on(query.fetch_all(pool)) {
+                                    Err(e) => return Err(e.to_string()),
+                                    Ok(rows) => rows,
+                                },
+                            }
+                        }
+                    },
+                };
+
+                let rowcount_regex = Regex::new(r" rows=([[:digit:]]+)").unwrap();
+                for row in explain_rows {
+                    let plan: &str = row.get("QUERY PLAN");
+                    if let Some(captures) = rowcount_regex.captures(plan) {
+                        if captures.len() > 1 {
+                            match &captures[1].parse::<usize>() {
+                                Ok(row_count) => return Ok(*row_count),
+                                Err(e) => return Err(e.to_string()),
+                            };
+                        }
+                    }
+                }
+                return Err(format!("Count not determine row count for query: {:?}", select));
+            }
         }
 
         fn estimated_count(
@@ -2947,4 +2992,47 @@ mod tests {
     }
 
     // TODO: Add test cases for the different count strategies here. Or maybe doctests instead.
+    #[test]
+    #[serial]
+    fn test_json_count() {
+        let pg_connection_options =
+            AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
+        let pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
+                .unwrap();
+
+        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
+        let sqlite_pool =
+            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
+                .unwrap();
+
+        let select = Select::new("my_table");
+        let result_map = select
+            .fetch_as_json_with_count_strategy(&pool, &HashMap::new(), &CountStrategy::Exact)
+            .unwrap();
+        let row_count = result_map.get("count").unwrap();
+        assert_eq!(row_count.as_u64().unwrap(), 4);
+
+        let result_map = select
+            .fetch_as_json_with_count_strategy(&pool, &HashMap::new(), &CountStrategy::Planned)
+            .unwrap();
+        let row_count = result_map.get("count").unwrap();
+        assert_eq!(row_count.as_u64().unwrap(), 4);
+
+        let result = select.fetch_as_json_with_count_strategy(
+            &pool,
+            &HashMap::new(),
+            &CountStrategy::Estimated,
+        );
+        //println!("RESULT: {:?}", result);
+
+        let result = select.fetch_as_json_with_count_strategy(
+            &pool,
+            &HashMap::new(),
+            &CountStrategy::Window,
+        );
+        //println!("RESULT: {:?}", result);
+
+        assert_eq!(1, 2);
+    }
 }
