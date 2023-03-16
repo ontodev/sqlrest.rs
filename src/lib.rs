@@ -1321,7 +1321,7 @@ impl Select {
         self
     }
 
-    /// Given an [OrderByStruct], add it to the vector `self.order_by`.
+    /// Given an [OrderByColumn], add it to the vector `self.order_by`.
     pub fn add_explicit_order_by(&mut self, order_by: &OrderByColumn) -> &mut Select {
         self.order_by.push(order_by.clone());
         self
@@ -1747,6 +1747,13 @@ impl Select {
         extract_rows_from_json_str(json_row)
     }
 
+    /// Maximum allowable value of [Select::limit] when querying from the web.
+    pub const WEB_LIMIT_MAX: usize = 100;
+    /// Default value to use for the limit parameter when querying from the web.
+    pub const WEB_LIMIT_DEFAULT: usize = 20;
+    /// Threshold for [estimated counts](CountStrategy::Estimated).
+    pub const ESTIMATED_COUNT_THRESHOLD: usize = 1000;
+
     /// Given a database connection pool, a parameter map, and a [CountStrategy], bind this select
     /// to the parameter map and then fetch the number of rows that would be returned by the query
     /// using the given strategy. Note that [CountStrategy::Window] is not supported by this
@@ -1835,11 +1842,21 @@ impl Select {
         }
 
         fn estimated_count(
-            _select: &Select,
-            _pool: &AnyPool,
-            _param_map: &HashMap<&str, SerdeValue>,
+            select: &Select,
+            pool: &AnyPool,
+            param_map: &HashMap<&str, SerdeValue>,
         ) -> Result<usize, String> {
-            todo!()
+            if pool.any_kind() == AnyKind::Sqlite {
+                // Planned/estimated count information is not available in SQLite, so we fallback to
+                // the exact count:
+                exact_count(select, pool, param_map)
+            } else {
+                match planned_count(select, pool, param_map) {
+                    Err(e) => Err(e),
+                    Ok(count) if count > Select::ESTIMATED_COUNT_THRESHOLD => Ok(count),
+                    _ => exact_count(select, pool, param_map),
+                }
+            }
         }
 
         match strategy {
@@ -1851,10 +1868,6 @@ impl Select {
             CountStrategy::Estimated => estimated_count(self, pool, param_map),
         }
     }
-    /// Maximum allowable value of [Select::limit] when querying from the web.
-    pub const WEB_LIMIT_MAX: usize = 100;
-    /// Default value to use for the limit parameter when querying from the web.
-    pub const WEB_LIMIT_DEFAULT: usize = 20;
 
     /// Given a database connection pool and a parameter map, bind this Select to the parameter map,
     /// execute the resulting query against the database, and return the result as a JSON object
@@ -2991,22 +3004,21 @@ mod tests {
         }
     }
 
-    // TODO: Add test cases for the different count strategies here. Or maybe doctests instead.
     #[test]
     #[serial]
-    fn test_json_count() {
+    fn test_count_strategies() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
         let pool =
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
                 .unwrap();
 
-        let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let sqlite_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
-                .unwrap();
+        // Run ANALYZE to bring the db statistics up to date:
+        let query = sqlx_query("ANALYZE");
+        block_on(query.execute(&pool)).unwrap();
 
         let select = Select::new("my_table");
+
         let result_map = select
             .fetch_as_json_with_count_strategy(&pool, &HashMap::new(), &CountStrategy::Exact)
             .unwrap();
@@ -3019,20 +3031,16 @@ mod tests {
         let row_count = result_map.get("count").unwrap();
         assert_eq!(row_count.as_u64().unwrap(), 4);
 
-        let result = select.fetch_as_json_with_count_strategy(
-            &pool,
-            &HashMap::new(),
-            &CountStrategy::Estimated,
-        );
-        //println!("RESULT: {:?}", result);
+        let result_map = select
+            .fetch_as_json_with_count_strategy(&pool, &HashMap::new(), &CountStrategy::Estimated)
+            .unwrap();
+        let row_count = result_map.get("count").unwrap();
+        assert_eq!(row_count.as_u64().unwrap(), 4);
 
-        let result = select.fetch_as_json_with_count_strategy(
-            &pool,
-            &HashMap::new(),
-            &CountStrategy::Window,
-        );
-        //println!("RESULT: {:?}", result);
-
-        assert_eq!(1, 2);
+        let result_map = select
+            .fetch_as_json_with_count_strategy(&pool, &HashMap::new(), &CountStrategy::Window)
+            .unwrap();
+        let row_count = result_map.get("count").unwrap();
+        assert_eq!(row_count.as_u64().unwrap(), 4);
     }
 }
