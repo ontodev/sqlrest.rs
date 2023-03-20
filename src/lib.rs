@@ -417,7 +417,26 @@
 //! assert!(result.is_err());
 //! ```
 //!
-//! ### Select specific columns from the table "bar" with no filtering.
+//! ### Select all columns from the table, bar, with filtering.
+//! ```rust
+//! # use ontodev_sqlrest::parse;
+//! # use urlencoding::{decode, encode};
+//! // Column names in filters are handled similarly to column names in select clauses.
+//! let from_url = "bar?\
+//!                 column 1=eq.5\
+//!                 &column_2=eq.10\
+//!                 &column%203=eq.30";
+//! let expected_sql = "SELECT * FROM \"bar\" \
+//!                     WHERE \"column 1\" = 5 \
+//!                     AND \"column_2\" = 10 \
+//!                     AND \"column 3\" = 30";
+//! let select = parse(from_url).unwrap();
+//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
+//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
+//! ```
+//!
+//! ### Select specific columns from the table "bar".
 //! ```rust
 //! # use ontodev_sqlrest::parse;
 //! # use urlencoding::{decode, encode};
@@ -467,25 +486,6 @@
 //! assert_eq!(expected_sqlite_sql, select.to_sqlite().unwrap());
 //! assert_eq!(expected_postgres_sql, select.to_postgres().unwrap());
 //! assert_eq!(encode(from_url), select.to_url().unwrap());
-//! ```
-//!
-//! ### Select all columns from the table, bar, with filtering.
-//! ```rust
-//! # use ontodev_sqlrest::parse;
-//! # use urlencoding::{decode, encode};
-//! // Column names in filters are handled similarly to column names in select clauses.
-//! let from_url = "bar?\
-//!                 column 1=eq.5\
-//!                 &column_2=eq.10\
-//!                 &column%203=eq.30";
-//! let expected_sql = "SELECT * FROM \"bar\" \
-//!                     WHERE \"column 1\" = 5 \
-//!                     AND \"column_2\" = 10 \
-//!                     AND \"column 3\" = 30";
-//! let select = parse(from_url).unwrap();
-//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
-//! assert_eq!(expected_sql, select.to_postgres().unwrap());
-//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //!
 //! // Wildcards in LIKE clauses are indicated using '*'.
 //! let from_url = "bar?foo=like.*yogi*";
@@ -504,6 +504,13 @@
 //! let from_url = "bar?%22column 1%22=eq.5";
 //! let result = parse(from_url);
 //! assert!(result.is_err());
+//!
+//! let from_url = "épée?universität=like.*münchen";
+//! let expected_sql = "SELECT * FROM \"épée\" WHERE \"universität\" LIKE '%münchen'";
+//! let select = parse(&from_url).unwrap();
+//! assert_eq!(expected_sql, select.to_sqlite().unwrap());
+//! assert_eq!(expected_sql, select.to_postgres().unwrap());
+//! assert_eq!(decode(from_url).unwrap(), decode(&select.to_url().unwrap()).unwrap());
 //! ```
 //!
 //! ### Literals and NULLs
