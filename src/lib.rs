@@ -3040,11 +3040,49 @@ mod tests {
     #[test]
     #[serial]
     fn test_count_strategies() {
+        // Setup database connections and create the needed tables:
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
         let pool =
             block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
                 .unwrap();
+        let drop_table1 = r#"DROP TABLE IF EXISTS "my_table""#;
+        let create_table1 = r#"CREATE TABLE "my_table" (
+                                 "row_number" BIGINT,
+                                 "prefix" TEXT,
+                                 "base" TEXT,
+                                 "ontology IRI" TEXT,
+                                 "version IRI" TEXT
+                               )"#;
+        let insert_table1 = r#"INSERT INTO "my_table" VALUES
+                                (1, 'p1', 'b1', 'o1', 'v1'),
+                                (2, 'p2', 'b2', 'o2', 'v2'),
+                                (3, 'p3', 'b3', 'o3', 'v3'),
+                                (4, 'p4', 'b4', 'o1', 'v4')"#;
+        let drop_table2 = r#"DROP TABLE IF EXISTS "a table name with spaces""#;
+        let create_table2 = r#"CREATE TABLE "a table name with spaces" (
+                                 "foo" TEXT,
+                                 "a column name with spaces" TEXT,
+                                 "bar" TEXT
+                               )"#;
+        let insert_table2 = r#"INSERT INTO "a table name with spaces" VALUES
+                                ('f1', 's1', 'b1'),
+                                ('f2', 's2', 'b2'),
+                                ('f3', 's3', 'b3'),
+                                ('f4', 's4', 'b4'),
+                                ('f5', 's5', 'b5'),
+                                ('f6', 's6', 'b6')"#;
+        for sql in &vec![
+            drop_table1,
+            create_table1,
+            insert_table1,
+            drop_table2,
+            create_table2,
+            insert_table2,
+        ] {
+            let query = sqlx_query(sql);
+            block_on(query.execute(&pool)).unwrap();
+        }
 
         // Run ANALYZE to bring the db statistics up to date:
         let query = sqlx_query("ANALYZE");
