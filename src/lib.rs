@@ -505,6 +505,7 @@
 //! let result = parse(from_url);
 //! assert!(result.is_err());
 //!
+//! // Unicode is supported.
 //! let from_url = "épée?universität=like.*münchen";
 //! let expected_sql = "SELECT * FROM \"épée\" WHERE \"universität\" LIKE '%münchen'";
 //! let select = parse(&from_url).unwrap();
