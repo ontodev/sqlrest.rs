@@ -1541,10 +1541,11 @@ impl Select {
         // Helper function to determine whether the given name is 'simple', i.e., such as to match
         // the DB_OBJECT_REGEX defined above.
         fn is_simple(db_object_name: &str) -> Result<(), String> {
-            if !DB_OBJECT_REGEX.is_match(db_object_name) {
+            let db_object_root = db_object_name.splitn(2, ".").collect::<Vec<_>>()[0];
+            if !DB_OBJECT_REGEX.is_match(&db_object_root) {
                 Err(format!(
-                    "Illegal database object name: '{}'. All names must match: '{}' for to_url().",
-                    db_object_name, DB_OBJECT_MATCH_STR,
+                    "Illegal database object name: '{}' in '{}'. All names must match: '{}' for to_url().",
+                    db_object_root, db_object_name, DB_OBJECT_MATCH_STR,
                 ))
             } else {
                 Ok(())
