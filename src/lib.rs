@@ -1541,10 +1541,11 @@ impl Select {
         // Helper function to determine whether the given name is 'simple', i.e., such as to match
         // the DB_OBJECT_REGEX defined above.
         fn is_simple(db_object_name: &str) -> Result<(), String> {
-            if !DB_OBJECT_REGEX.is_match(db_object_name) {
+            let db_object_root = db_object_name.splitn(2, ".").collect::<Vec<_>>()[0];
+            if !DB_OBJECT_REGEX.is_match(&db_object_root) {
                 Err(format!(
-                    "Illegal database object name: '{}'. All names must match: '{}' for to_url().",
-                    db_object_name, DB_OBJECT_MATCH_STR,
+                    "Illegal database object name: '{}' in '{}'. All names must match: '{}' for to_url().",
+                    db_object_root, db_object_name, DB_OBJECT_MATCH_STR,
                 ))
             } else {
                 Ok(())
@@ -1694,8 +1695,16 @@ impl Select {
         let sql = if !as_json {
             sql
         } else if dbtype == DbType::Sqlite {
+            let mut select = self.clone();
+            if select.select.len() == 0 {
+                // To use JSON_GROUP_ARRAY in the way that we want, we need to explicitly specify
+                // every column name when all columns are selected.
+                if let Err(s) = select.select_all(pool) {
+                    return Err(s);
+                }
+            }
             let mut json_keys = vec![];
-            for select_column in &self.select {
+            for select_column in &select.select {
                 // The `select_column.cast` field is not used here, since if there are any casts
                 // they will have been taken account of in the to_sql() function above.
                 let column = &select_column.expression;
@@ -1707,7 +1716,7 @@ impl Select {
                 json_keys.push(format!(r#"'{}', "{}""#, unquoted_column, unquoted_column));
             }
             // Add a key for the window function alias if one is associated with this query.
-            if let Some(window) = &self.window {
+            if let Some(window) = &select.window {
                 let alias = match &window.alias {
                     None => format!("{}_{}", window.function.to_lowercase(), window.column),
                     Some(alias) => alias.to_string(),
