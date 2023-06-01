@@ -643,7 +643,7 @@ use urlencoding::{decode, encode};
 
 pub const HTTP_SUCCESS: usize = 200;
 pub const HTTP_SUCCESS_PARTIAL_CONTENT: usize = 206;
-pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ ]+$";
+pub const DB_OBJECT_MATCH_STR: &str = r"^[\w_ \(\)/]+$";
 
 lazy_static! {
     /// List of reserved characters that are accepted as part of a literal value string in URL input
