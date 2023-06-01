@@ -2996,7 +2996,7 @@ mod tests {
     #[should_panic]
     fn test_simple_ddl() {
         let mut select = Select::new("my_table");
-        select.add_select("COUNT(1)");
+        select.add_select("COUNT[1]");
         if let Ok(_) = select.to_url() {
             return;
         }
