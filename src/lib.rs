@@ -637,7 +637,7 @@ use sqlx::{
     query::Query,
     Row,
 };
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, fmt, str::FromStr};
 use tree_sitter::{Node, Parser};
 use urlencoding::{decode, encode};
 
@@ -733,6 +733,28 @@ impl FromStr for Operator {
             "not_in" => Ok(Operator::NotIn),
             _ => Err(format!("Unable to parse '{}' as an operator.", s)),
         }
+    }
+}
+
+impl fmt::Display for Operator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match &self {
+            Operator::Equals => "eq",
+            Operator::NotEquals => "not_eq",
+            Operator::LessThan => "lt",
+            Operator::GreaterThan => "gt",
+            Operator::LessThanEquals => "lte",
+            Operator::GreaterThanEquals => "gte",
+            Operator::Like => "like",
+            Operator::NotLike => "not_like",
+            Operator::ILike => "ilike",
+            Operator::NotILike => "not_ilike",
+            Operator::Is => "is",
+            Operator::IsNot => "not_is",
+            Operator::In => "in",
+            Operator::NotIn => "not_in",
+        };
+        write!(f, "{}", s)
     }
 }
 
