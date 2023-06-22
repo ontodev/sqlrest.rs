@@ -1521,8 +1521,8 @@ impl Select {
         self.to_sql_count(&DbType::Postgres)
     }
 
-    /// Convert the given Select struct to a SerdeMap representing the query string. Returns an error in the following
-    /// circumstances:
+    /// Convert the given Select struct to a SerdeMap representing the query string. Returns an error
+    /// in the following circumstances:
     /// - The `table` field has not been defined or it contains characters other than word
     ///   characters, underscores, and spaces.
     /// - One of the columns included in the `select`, `order_by`, or `filter` fields contains
@@ -1663,10 +1663,7 @@ impl Select {
     ///   characters other than word characters, underscores, and spaces.
     /// - The `group_by` or `having` clauses have been defined (these aren't supported by to_url()).
     pub fn to_url(&self) -> Result<String, String> {
-        let params = match &self.to_params() {
-            Ok(x) => x.clone(),
-            Err(x) => return Err(x.into()),
-        };
+        let params = &self.to_params()?.clone();
         let table = unquote(&self.table).unwrap_or(self.table.to_string());
         if let Err(e) = is_simple(&table) {
             return Err(format!("While reading table name, got error: {}", e));
