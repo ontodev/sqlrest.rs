@@ -1521,14 +1521,14 @@ impl Select {
         self.to_sql_count(&DbType::Postgres)
     }
 
-    /// Convert the given Select struct to a SQLRest URL. Returns an error in the following
-    /// circumstances:
+    /// Convert the given Select struct to a SerdeMap representing the query string. Returns an error
+    /// in the following circumstances:
     /// - The `table` field has not been defined or it contains characters other than word
     ///   characters, underscores, and spaces.
     /// - One of the columns included in the `select`, `order_by`, or `filter` fields contains
     ///   characters other than word characters, underscores, and spaces.
     /// - The `group_by` or `having` clauses have been defined (these aren't supported by to_url()).
-    pub fn to_url(&self) -> Result<String, String> {
+    pub fn to_params(&self) -> Result<SerdeMap<String, SerdeValue>, String> {
         if self.table.is_empty() {
             return Err("Missing required field: `table` in to_sql()".to_string());
         }
@@ -1560,21 +1560,7 @@ impl Select {
             }
         }
 
-        // Helper function to determine whether the given name is 'simple', i.e., such as to match
-        // the DB_OBJECT_REGEX defined above.
-        fn is_simple(db_object_name: &str) -> Result<(), String> {
-            let db_object_root = db_object_name.splitn(2, ".").collect::<Vec<_>>()[0];
-            if !DB_OBJECT_REGEX.is_match(&db_object_root) {
-                Err(format!(
-                    "Illegal database object name: '{}' in '{}'. All names must match: '{}' for to_url().",
-                    db_object_root, db_object_name, DB_OBJECT_MATCH_STR,
-                ))
-            } else {
-                Ok(())
-            }
-        }
-
-        let mut params = vec![];
+        let mut params = SerdeMap::new();
         if self.select.len() > 0 {
             let mut parts = vec![];
             for select_column in &self.select {
@@ -1606,7 +1592,7 @@ impl Select {
                 };
                 parts.push(part);
             }
-            params.push(format!("select={}", parts.join(",")));
+            params.insert("select".into(), parts.join(",").into());
         }
 
         if self.filter.len() > 0 {
@@ -1644,23 +1630,7 @@ impl Select {
                 if let Err(e) = is_simple(&lhs) {
                     return Err(format!("While reading filters, got error: {}", e));
                 }
-                let x = match filter.operator {
-                    Operator::Equals => format!(r#"{}=eq.{}"#, lhs, rhs),
-                    Operator::NotEquals => format!(r#"{}=not_eq.{}"#, lhs, rhs),
-                    Operator::LessThan => format!(r#"{}=lt.{}"#, lhs, rhs),
-                    Operator::GreaterThan => format!(r#"{}=gt.{}"#, lhs, rhs),
-                    Operator::LessThanEquals => format!(r#"{}=lte.{}"#, lhs, rhs),
-                    Operator::GreaterThanEquals => format!(r#"{}=gte.{}"#, lhs, rhs),
-                    Operator::Like => format!(r#"{}=like.{}"#, lhs, rhs),
-                    Operator::NotLike => format!(r#"{}=not_like.{}"#, lhs, rhs),
-                    Operator::ILike => format!(r#"{}=ilike.{}"#, lhs, rhs),
-                    Operator::NotILike => format!(r#"{}=not_ilike.{}"#, lhs, rhs),
-                    Operator::Is => format!(r#"{}=is.{}"#, lhs, rhs),
-                    Operator::IsNot => format!(r#"{}=not_is.{}"#, lhs, rhs),
-                    Operator::In => format!(r#"{}=in.{}"#, lhs, rhs),
-                    Operator::NotIn => format!(r#"{}=not_in.{}"#, lhs, rhs),
-                };
-                params.push(x);
+                params.insert(lhs, format!("{}.{}", filter.operator, rhs).into());
             }
         }
         if self.order_by.len() > 0 {
@@ -1674,21 +1644,40 @@ impl Select {
                 let direction = order_by_column.direction.to_url();
                 parts.push(format!("{}.{}", column, direction));
             }
-            params.push(format!("order={}", parts.join(",")));
+            params.insert("order".into(), parts.join(",").into());
         }
         if let Some(limit) = self.limit {
-            params.push(format!("limit={}", limit));
+            params.insert("limit".into(), limit.into());
         }
         if let Some(offset) = self.offset {
-            params.push(format!("offset={}", offset));
+            params.insert("offset".into(), offset.into());
         }
+        Ok(params)
+    }
 
+    /// Convert the given Select struct to a SQLRest URL. Returns an error in the following
+    /// circumstances:
+    /// - The `table` field has not been defined or it contains characters other than word
+    ///   characters, underscores, and spaces.
+    /// - One of the columns included in the `select`, `order_by`, or `filter` fields contains
+    ///   characters other than word characters, underscores, and spaces.
+    /// - The `group_by` or `having` clauses have been defined (these aren't supported by to_url()).
+    pub fn to_url(&self) -> Result<String, String> {
+        let params = &self.to_params()?.clone();
         let table = unquote(&self.table).unwrap_or(self.table.to_string());
         if let Err(e) = is_simple(&table) {
             return Err(format!("While reading table name, got error: {}", e));
         }
         if params.len() > 0 {
-            Ok(encode(&format!("{}?{}", table, params.join("&"))).to_string())
+            let mut parts = vec![];
+            for (key, value) in params.iter() {
+                let s = match value {
+                    serde_json::Value::String(s) => s.as_str().into(),
+                    _ => format!("{}", value),
+                };
+                parts.push(format!("{}={}", key, s));
+            }
+            Ok(encode(&format!("{}?{}", table, parts.join("&"))).into())
         } else {
             Ok(encode(&table.clone()).to_string())
         }
@@ -2884,6 +2873,20 @@ pub fn interpolate_sql<S: Into<String>>(
     }
     final_sql.push_str(&sql[saved_start..]);
     Ok(final_sql)
+}
+
+// Helper function to determine whether the given name is 'simple', i.e., such as to match
+// the DB_OBJECT_REGEX defined above.
+fn is_simple(db_object_name: &str) -> Result<(), String> {
+    let db_object_root = db_object_name.splitn(2, ".").collect::<Vec<_>>()[0];
+    if !DB_OBJECT_REGEX.is_match(&db_object_root) {
+        Err(format!(
+            "Illegal database object name: '{}' in '{}'. All names must match: '{}' for to_url().",
+            db_object_root, db_object_name, DB_OBJECT_MATCH_STR,
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
