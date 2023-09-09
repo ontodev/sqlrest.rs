@@ -2171,6 +2171,10 @@ pub fn transduce(n: &Node, raw: &str, query_result: &mut Result<Select, String>)
     }
 }
 
+fn is_error(n: &Node) -> bool {
+    n.kind().to_lowercase() == "error"
+}
+
 /// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
 /// iterate over the node's child nodes and transduce them into the Select struct.
 pub fn transduce_children(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
@@ -2180,7 +2184,9 @@ pub fn transduce_children(n: &Node, raw: &str, query_result: &mut Result<Select,
             let child_count = n.named_child_count();
             for i in 0..child_count {
                 match n.named_child(i) {
-                    Some(named_child) => transduce(&named_child, raw, query_result),
+                    Some(named_child) if !is_error(&named_child) => {
+                        transduce(&named_child, raw, query_result)
+                    }
                     _ => {
                         *query_result = Err(format!(
                             "Unable to extract named child #{} from Node {:?}",
@@ -2200,7 +2206,7 @@ pub fn transduce_table(n: &Node, raw: &str, query_result: &mut Result<Select, St
     match query_result {
         Err(_) => return,
         Ok(query) => match n.named_child(0) {
-            Some(child) => match decode(&get_from_raw(&child, raw)) {
+            Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                 Ok(table) => {
                     query.table(format!("\"{}\"", table));
                 }
@@ -2224,7 +2230,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
         Ok(query) => {
             let column = {
                 match n.named_child(0) {
-                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                         Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2242,7 +2248,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
             };
             let operator_string = {
                 match n.named_child(1) {
-                    Some(child) => get_from_raw(&child, raw),
+                    Some(child) if !is_error(&child) => get_from_raw(&child, raw),
                     _ => {
                         *query_result = Err(format!(
                             "Unable to extract 1st named child from Node {:?}",
@@ -2255,7 +2261,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
 
             let value_node = {
                 match n.named_child(2) {
-                    Some(value_node) => value_node,
+                    Some(value_node) if !is_error(&value_node) => value_node,
                     _ => {
                         *query_result = Err(format!(
                             "Unable to extract 2nd named child from Node {:?}",
@@ -2351,7 +2357,7 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
         Ok(query) => {
             let column = {
                 match n.named_child(0) {
-                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                         Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2369,7 +2375,7 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
             };
             let values = {
                 match n.named_child(1) {
-                    Some(child) => match transduce_list(&child, raw) {
+                    Some(child) if !is_error(&child) => match transduce_list(&child, raw) {
                         Ok(values) => values,
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2429,7 +2435,7 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
     ) -> Result<(String, Option<String>, Option<String>), String> {
         fn get_field(n: &Option<Node>, raw: &str) -> Result<String, String> {
             match n {
-                Some(field) => match decode(&get_from_raw(&field, raw)) {
+                Some(field) if !is_error(&field) => match decode(&get_from_raw(&field, raw)) {
                     Ok(field) => Ok(field.to_string()),
                     Err(e) => Err(e.to_string()),
                 },
@@ -2446,8 +2452,8 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
             Ok((column, None, None))
         } else if child_count == 2 {
             let first_node = match n.named_child(0) {
-                Some(n) => n,
-                None => {
+                Some(n) if !is_error(&n) => n,
+                _ => {
                     return Err(format!(
                         "Unable to extract 0th named child from node: {:?}",
                         n
@@ -2501,19 +2507,21 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
             for i in 0..child_count {
                 let (column, alias, cast) = {
                     match n.named_child(i) {
-                        Some(child) => match decode(&get_from_raw(&child, raw)) {
-                            Ok(_) => match extract_column_qualifiers(&child, raw) {
-                                Ok((column, alias, cast)) => (column, alias, cast),
+                        Some(child) if !is_error(&child) => {
+                            match decode(&get_from_raw(&child, raw)) {
+                                Ok(_) => match extract_column_qualifiers(&child, raw) {
+                                    Ok((column, alias, cast)) => (column, alias, cast),
+                                    Err(e) => {
+                                        *query_result = Err(e.to_string());
+                                        return;
+                                    }
+                                },
                                 Err(e) => {
                                     *query_result = Err(e.to_string());
                                     return;
                                 }
-                            },
-                            Err(e) => {
-                                *query_result = Err(e.to_string());
-                                return;
                             }
-                        },
+                        }
                         _ => {
                             *query_result = Err(format!(
                                 "Unable to extract named child #{} from Node: {:?}",
@@ -2547,14 +2555,14 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
             let mut position = 0;
             while position < child_count {
                 let named_child = match n.named_child(position) {
-                    None => {
+                    Some(named_child) if !is_error(&named_child) => named_child,
+                    _ => {
                         *query_result = Err(format!(
                             "Unable to extract named child #{} from Node: {:?}",
                             position, n
                         ));
                         return;
                     }
-                    Some(named_child) => named_child,
                 };
 
                 let column = get_from_raw(&named_child, raw);
@@ -2566,37 +2574,43 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     Ok(column) => column,
                 };
 
+                let default_order =
+                    OrderByColumn::new(format!("\"{}\"", column), &Direction::Ascending);
                 position = position + 1;
+                if position >= child_count {
+                    query.add_explicit_order_by(&default_order);
+                    return;
+                }
+
                 let named_child = match n.named_child(position) {
-                    None => {
+                    Some(named_child) if !is_error(&named_child) => named_child,
+                    _ => {
                         *query_result = Err(format!(
                             "Unable to extract named child #{} from Node: {:?}",
                             position, n
                         ));
                         return;
                     }
-                    Some(named_child) => named_child,
                 };
 
-                if position < child_count && named_child.kind().eq("ordering") {
-                    let ordering_string = get_from_raw(&named_child, raw);
-                    let ordering = Direction::from_str(&ordering_string);
-                    match ordering {
-                        Ok(o) => {
-                            position = position + 1;
-                            let order = OrderByColumn::new(format!("\"{}\"", column), &o);
-                            query.add_explicit_order_by(&order);
-                        }
-                        Err(e) => {
-                            *query_result = Err(e.to_string());
-                            return;
-                        }
-                    };
-                } else {
-                    let ordering = Direction::Ascending; //default ordering is ASC
-                    let order = OrderByColumn::new(format!("\"{}\"", column), &ordering);
-                    query.add_explicit_order_by(&order);
+                if !named_child.kind().eq("ordering") {
+                    query.add_explicit_order_by(&default_order);
+                    return;
                 }
+
+                let ordering_string = get_from_raw(&named_child, raw);
+                let ordering = Direction::from_str(&ordering_string);
+                match ordering {
+                    Ok(o) => {
+                        position = position + 1;
+                        let order = OrderByColumn::new(format!("\"{}\"", column), &o);
+                        query.add_explicit_order_by(&order);
+                    }
+                    Err(e) => {
+                        *query_result = Err(e.to_string());
+                        return;
+                    }
+                };
             }
         }
     }
@@ -2610,14 +2624,14 @@ pub fn transduce_offset(n: &Node, raw: &str, query_result: &mut Result<Select, S
         Err(_) => return,
         Ok(query) => {
             let offset_str = match n.named_child(0) {
-                None => {
+                Some(named_child) if !is_error(&named_child) => get_from_raw(&named_child, raw),
+                _ => {
                     *query_result = Err(format!(
                         "Unable to extract 0th named child from Node: {:?}",
                         n
                     ));
                     return;
                 }
-                Some(named_child) => get_from_raw(&named_child, raw),
             };
             let offset: usize = match offset_str.parse() {
                 Err(_) => {
@@ -2639,14 +2653,14 @@ pub fn transduce_limit(n: &Node, raw: &str, query_result: &mut Result<Select, St
         Err(_) => return,
         Ok(query) => {
             let limit_str = match n.named_child(0) {
-                None => {
+                Some(named_child) if !is_error(&named_child) => get_from_raw(&named_child, raw),
+                _ => {
                     *query_result = Err(format!(
                         "Unable to extract 0th named child from Node: {:?}",
                         n
                     ));
                     return;
                 }
-                Some(named_child) => get_from_raw(&named_child, raw),
             };
             let limit: usize = match limit_str.parse() {
                 Err(_) => {
@@ -3274,6 +3288,22 @@ mod tests {
     fn test_false_star() {
         // Wildcards ('*') are only allowed in LIKE clauses, so this should fail:
         let from_url = "bar?foo=eq.*yogi*";
+        parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_select() {
+        // Parentheses are not allowed in select clauses:
+        let from_url = "penguin?select=Delta 15 N (o/oo)";
+        parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_order_by() {
+        // Parentheses are not allowed in order by clauses:
+        let from_url = "penguin?order=Delta 15 N (o/ooo).desc";
         parse(from_url).unwrap();
     }
 }
