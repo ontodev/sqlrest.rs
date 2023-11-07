@@ -817,7 +817,11 @@ impl Filter {
     /// Given a left hand side, a right hand side, and an operator, create a new filter.
     pub fn new<S: Into<String>>(lhs: S, operator: S, rhs: SerdeValue) -> Result<Filter, String> {
         match Operator::from_str(&operator.into()) {
-            Ok(operator) => Ok(Filter { lhs: lhs.into(), operator: operator, rhs: rhs }),
+            Ok(operator) => Ok(Filter {
+                lhs: lhs.into(),
+                operator: operator,
+                rhs: rhs,
+            }),
             Err(error) => Err(error),
         }
     }
@@ -867,7 +871,12 @@ impl Filter {
         if *dbtype == DbType::Postgres {
             Ok(format!("{}{} ILIKE {}", lhs.into(), negation, rhs))
         } else {
-            Ok(format!("LOWER({}){} LIKE LOWER({})", lhs.into(), negation, rhs))
+            Ok(format!(
+                "LOWER({}){} LIKE LOWER({})",
+                lhs.into(),
+                negation,
+                rhs
+            ))
         }
     }
 
@@ -894,7 +903,10 @@ impl Filter {
                     if i == 0 {
                         is_string_list = true;
                     } else if !is_string_list {
-                        return Err(format!("{:?} contains both text and numeric types.", options));
+                        return Err(format!(
+                            "{:?} contains both text and numeric types.",
+                            options
+                        ));
                     }
                     values.push(format!("{}", s))
                 }
@@ -902,11 +914,19 @@ impl Filter {
                     if i == 0 {
                         is_string_list = false;
                     } else if is_string_list {
-                        return Err(format!("{:?} contains both text and numeric types.", options));
+                        return Err(format!(
+                            "{:?} contains both text and numeric types.",
+                            options
+                        ));
                     }
                     values.push(format!("{}", n))
                 }
-                _ => return Err(format!("{:?} is not an array of strings or numbers.", options)),
+                _ => {
+                    return Err(format!(
+                        "{:?} is not an array of strings or numbers.",
+                        options
+                    ))
+                }
             };
         }
         let value_list = format!("({})", values.join(", "));
@@ -1077,7 +1097,11 @@ impl Window {
     /// Given a function name, a column name, and optionally an alias, create a new Window struct.
     pub fn new<S: Into<String>>(function: S, column: S, alias: Option<S>) -> Window {
         match alias {
-            None => Window { function: function.into(), column: column.into(), alias: None },
+            None => Window {
+                function: function.into(),
+                column: column.into(),
+                alias: None,
+            },
             Some(alias) => Window {
                 function: function.into(),
                 column: column.into(),
@@ -1116,7 +1140,10 @@ pub struct SelectColumn {
 impl SelectColumn {
     /// Given an expression and optionally an alias and/or a cast, create a new SelectColumn struct.
     pub fn new<S: Into<String>>(expression: S, alias: Option<S>, cast: Option<S>) -> SelectColumn {
-        let mut select_col = SelectColumn { expression: expression.into(), ..Default::default() };
+        let mut select_col = SelectColumn {
+            expression: expression.into(),
+            ..Default::default()
+        };
         if let Some(alias) = alias {
             select_col.alias = Some(alias.into());
         }
@@ -1128,7 +1155,9 @@ impl SelectColumn {
 
     /// Clone the given SelectColumn.
     pub fn clone(select_column: &SelectColumn) -> SelectColumn {
-        SelectColumn { ..select_column.clone() }
+        SelectColumn {
+            ..select_column.clone()
+        }
     }
 
     /// Convert the given window into an SQL string suitable to be used in a SELECT clause.
@@ -1158,17 +1187,26 @@ pub struct OrderByColumn {
 impl OrderByColumn {
     /// Given a column and a direction, create a new OrderByColumn struct.
     pub fn new<S: Into<String>>(column: S, direction: &Direction) -> OrderByColumn {
-        OrderByColumn { column: column.into(), direction: direction.clone() }
+        OrderByColumn {
+            column: column.into(),
+            direction: direction.clone(),
+        }
     }
 
     /// Clone the given OrderByColumn
     pub fn clone(order_by_column: &OrderByColumn) -> OrderByColumn {
-        OrderByColumn { ..order_by_column.clone() }
+        OrderByColumn {
+            ..order_by_column.clone()
+        }
     }
 
     /// Convert the given OrderByColumn into an SQL string suitable for use in an OEDER BY clause.
     pub fn to_sql(&self) -> String {
-        format!("{} {}", quote_if_whitespace(&self.column), self.direction.to_sql())
+        format!(
+            "{} {}",
+            quote_if_whitespace(&self.column),
+            self.direction.to_sql()
+        )
     }
 }
 
@@ -1221,7 +1259,10 @@ impl Select {
     /// Create a new Select struct with the given table name and with its other fields initialized
     /// to their default values.
     pub fn new<S: Into<String>>(table: S) -> Select {
-        Select { table: table.into(), ..Default::default() }
+        Select {
+            table: table.into(),
+            ..Default::default()
+        }
     }
 
     /// Clone the given Select struct.
@@ -1258,7 +1299,8 @@ impl Select {
 
     /// Given a column expression, add it to the vector, `self.select` without an alias.
     pub fn add_select<S: Into<String>>(&mut self, select: S) -> &mut Select {
-        self.select.push(SelectColumn::new(select.into(), None, None));
+        self.select
+            .push(SelectColumn::new(select.into(), None, None));
         self
     }
 
@@ -1463,7 +1505,11 @@ impl Select {
         }
         if !self.order_by.is_empty() {
             sql.push_str(" ORDER BY ");
-            let order_strings = self.order_by.iter().map(|o| o.to_sql()).collect::<Vec<String>>();
+            let order_strings = self
+                .order_by
+                .iter()
+                .map(|o| o.to_sql())
+                .collect::<Vec<String>>();
             sql.push_str(&format!("{}", order_strings.join(", ")));
         }
         if let Some(limit) = self.limit {
@@ -1500,7 +1546,10 @@ impl Select {
         count_select.offset = None;
         let inner_sql = count_select.to_sql(dbtype);
         match inner_sql {
-            Ok(inner_sql) => Ok(format!("SELECT COUNT(1) AS count FROM ({}) AS t", inner_sql)),
+            Ok(inner_sql) => Ok(format!(
+                "SELECT COUNT(1) AS count FROM ({}) AS t",
+                inner_sql
+            )),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -1735,7 +1784,10 @@ impl Select {
                 json_keys.push(format!(r#"'{}', "{}""#, alias, alias));
             }
             let json_select = json_keys.join(", ");
-            format!("SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})", json_select, sql)
+            format!(
+                "SELECT JSON_GROUP_ARRAY(JSON_OBJECT({})) AS row FROM ({})",
+                json_select, sql
+            )
         } else {
             format!("SELECT JSON_AGG(t)::TEXT AS row FROM ({}) t", sql)
         };
@@ -1780,7 +1832,10 @@ impl Select {
 
         let row = {
             if rows.len() != 1 {
-                return Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()));
+                return Err(format!(
+                    "In fetch_rows_as_json(), expected 1 row, got {}",
+                    rows.len()
+                ));
             }
             rows.pop().unwrap()
         };
@@ -1882,7 +1937,10 @@ impl Select {
                         }
                     }
                 }
-                return Err(format!("Count not determine row count for query: {:?}", select));
+                return Err(format!(
+                    "Count not determine row count for query: {:?}",
+                    select
+                ));
             }
         }
 
@@ -2069,7 +2127,9 @@ pub fn parse(url: &str) -> Result<Select, String> {
     let url = url.to_string();
 
     let mut parser: Parser = Parser::new();
-    parser.set_language(tree_sitter_sqlrest::language()).expect("Error loading sqlrest grammar");
+    parser
+        .set_language(tree_sitter_sqlrest::language())
+        .expect("Error loading sqlrest grammar");
     let tree = parser.parse(&url, None);
     match tree {
         Some(tree) => {
@@ -2111,6 +2171,10 @@ pub fn transduce(n: &Node, raw: &str, query_result: &mut Result<Select, String>)
     }
 }
 
+fn is_error(n: &Node) -> bool {
+    n.kind().to_lowercase() == "error"
+}
+
 /// Given a tree-sitter node, a raw string, and a mutable Select struct wrapped in a Result enum,
 /// iterate over the node's child nodes and transduce them into the Select struct.
 pub fn transduce_children(n: &Node, raw: &str, query_result: &mut Result<Select, String>) {
@@ -2120,10 +2184,14 @@ pub fn transduce_children(n: &Node, raw: &str, query_result: &mut Result<Select,
             let child_count = n.named_child_count();
             for i in 0..child_count {
                 match n.named_child(i) {
-                    Some(named_child) => transduce(&named_child, raw, query_result),
+                    Some(named_child) if !is_error(&named_child) => {
+                        transduce(&named_child, raw, query_result)
+                    }
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract named child #{} from Node {:?}", i, n));
+                        *query_result = Err(format!(
+                            "Unable to extract named child #{} from Node {:?}",
+                            i, n
+                        ));
                         return;
                     }
                 };
@@ -2138,14 +2206,17 @@ pub fn transduce_table(n: &Node, raw: &str, query_result: &mut Result<Select, St
     match query_result {
         Err(_) => return,
         Ok(query) => match n.named_child(0) {
-            Some(child) => match decode(&get_from_raw(&child, raw)) {
+            Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                 Ok(table) => {
                     query.table(format!("\"{}\"", table));
                 }
                 Err(e) => *query_result = Err(e.to_string()),
             },
             _ => {
-                *query_result = Err(format!("Unable to extract 0th named child from Node: {:?}", n))
+                *query_result = Err(format!(
+                    "Unable to extract 0th named child from Node: {:?}",
+                    n
+                ))
             }
         },
     }
@@ -2159,7 +2230,7 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
         Ok(query) => {
             let column = {
                 match n.named_child(0) {
-                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                         Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2167,18 +2238,22 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
                         }
                     },
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                        *query_result = Err(format!(
+                            "Unable to extract 0th named child from Node: {:?}",
+                            n
+                        ));
                         return;
                     }
                 }
             };
             let operator_string = {
                 match n.named_child(1) {
-                    Some(child) => get_from_raw(&child, raw),
+                    Some(child) if !is_error(&child) => get_from_raw(&child, raw),
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract 1st named child from Node {:?}", n));
+                        *query_result = Err(format!(
+                            "Unable to extract 1st named child from Node {:?}",
+                            n
+                        ));
                         return;
                     }
                 }
@@ -2186,10 +2261,12 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
 
             let value_node = {
                 match n.named_child(2) {
-                    Some(value_node) => value_node,
+                    Some(value_node) if !is_error(&value_node) => value_node,
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract 2nd named child from Node {:?}", n));
+                        *query_result = Err(format!(
+                            "Unable to extract 2nd named child from Node {:?}",
+                            n
+                        ));
                         return;
                     }
                 }
@@ -2246,13 +2323,22 @@ pub fn transduce_filter(n: &Node, raw: &str, query_result: &mut Result<Select, S
 /// vector of strings.
 pub fn transduce_list(n: &Node, raw: &str) -> Result<Vec<String>, String> {
     if n.kind() != "list" {
-        return Err(format!("Node: '{:?}' of kind '{}' is not a list", n, n.kind()));
+        return Err(format!(
+            "Node: '{:?}' of kind '{}' is not a list",
+            n,
+            n.kind()
+        ));
     }
     let mut vec = Vec::new();
     let child_count = n.named_child_count();
     for i in 0..child_count {
         match n.named_child(i) {
-            None => return Err(format!("Unable to extract named child #{} from Node {:?}", i, n)),
+            None => {
+                return Err(format!(
+                    "Unable to extract named child #{} from Node {:?}",
+                    i, n
+                ))
+            }
             Some(child) => match decode(&get_from_raw(&child, raw)) {
                 Err(e) => return Err(e.to_string()),
                 Ok(value) => vec.push(value.into_owned()),
@@ -2271,7 +2357,7 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
         Ok(query) => {
             let column = {
                 match n.named_child(0) {
-                    Some(child) => match decode(&get_from_raw(&child, raw)) {
+                    Some(child) if !is_error(&child) => match decode(&get_from_raw(&child, raw)) {
                         Ok(column) => format!("\"{}\"", column),
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2279,15 +2365,17 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
                         }
                     },
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                        *query_result = Err(format!(
+                            "Unable to extract 0th named child from Node: {:?}",
+                            n
+                        ));
                         return;
                     }
                 }
             };
             let values = {
                 match n.named_child(1) {
-                    Some(child) => match transduce_list(&child, raw) {
+                    Some(child) if !is_error(&child) => match transduce_list(&child, raw) {
                         Ok(values) => values,
                         Err(e) => {
                             *query_result = Err(e.to_string());
@@ -2295,8 +2383,10 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
                         }
                     },
                     _ => {
-                        *query_result =
-                            Err(format!("Unable to extract 1st named child from Node: {:?}", n));
+                        *query_result = Err(format!(
+                            "Unable to extract 1st named child from Node: {:?}",
+                            n
+                        ));
                         return;
                     }
                 }
@@ -2318,7 +2408,11 @@ pub fn transduce_in(n: &Node, raw: &str, query_result: &mut Result<Select, Strin
                     },
                 }
             }
-            let operator_str = if negate { String::from("not_in") } else { String::from("in") };
+            let operator_str = if negate {
+                String::from("not_in")
+            } else {
+                String::from("in")
+            };
             match Filter::new(column, operator_str, SerdeValue::Array(choices)) {
                 Ok(filter) => query.add_filter(filter),
                 Err(e) => {
@@ -2341,7 +2435,7 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
     ) -> Result<(String, Option<String>, Option<String>), String> {
         fn get_field(n: &Option<Node>, raw: &str) -> Result<String, String> {
             match n {
-                Some(field) => match decode(&get_from_raw(&field, raw)) {
+                Some(field) if !is_error(&field) => match decode(&get_from_raw(&field, raw)) {
                     Ok(field) => Ok(field.to_string()),
                     Err(e) => Err(e.to_string()),
                 },
@@ -2358,9 +2452,12 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
             Ok((column, None, None))
         } else if child_count == 2 {
             let first_node = match n.named_child(0) {
-                Some(n) => n,
-                None => {
-                    return Err(format!("Unable to extract 0th named child from node: {:?}", n))
+                Some(n) if !is_error(&n) => n,
+                _ => {
+                    return Err(format!(
+                        "Unable to extract 0th named child from node: {:?}",
+                        n
+                    ))
                 }
             };
             if first_node.kind() == "column" {
@@ -2410,19 +2507,21 @@ pub fn transduce_select(n: &Node, raw: &str, query_result: &mut Result<Select, S
             for i in 0..child_count {
                 let (column, alias, cast) = {
                     match n.named_child(i) {
-                        Some(child) => match decode(&get_from_raw(&child, raw)) {
-                            Ok(_) => match extract_column_qualifiers(&child, raw) {
-                                Ok((column, alias, cast)) => (column, alias, cast),
+                        Some(child) if !is_error(&child) => {
+                            match decode(&get_from_raw(&child, raw)) {
+                                Ok(_) => match extract_column_qualifiers(&child, raw) {
+                                    Ok((column, alias, cast)) => (column, alias, cast),
+                                    Err(e) => {
+                                        *query_result = Err(e.to_string());
+                                        return;
+                                    }
+                                },
                                 Err(e) => {
                                     *query_result = Err(e.to_string());
                                     return;
                                 }
-                            },
-                            Err(e) => {
-                                *query_result = Err(e.to_string());
-                                return;
                             }
-                        },
+                        }
                         _ => {
                             *query_result = Err(format!(
                                 "Unable to extract named child #{} from Node: {:?}",
@@ -2456,14 +2555,14 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
             let mut position = 0;
             while position < child_count {
                 let named_child = match n.named_child(position) {
-                    None => {
+                    Some(named_child) if !is_error(&named_child) => named_child,
+                    _ => {
                         *query_result = Err(format!(
                             "Unable to extract named child #{} from Node: {:?}",
                             position, n
                         ));
                         return;
                     }
-                    Some(named_child) => named_child,
                 };
 
                 let column = get_from_raw(&named_child, raw);
@@ -2475,37 +2574,43 @@ pub fn transduce_order(n: &Node, raw: &str, query_result: &mut Result<Select, St
                     Ok(column) => column,
                 };
 
+                let default_order =
+                    OrderByColumn::new(format!("\"{}\"", column), &Direction::Ascending);
                 position = position + 1;
+                if position >= child_count {
+                    query.add_explicit_order_by(&default_order);
+                    return;
+                }
+
                 let named_child = match n.named_child(position) {
-                    None => {
+                    Some(named_child) if !is_error(&named_child) => named_child,
+                    _ => {
                         *query_result = Err(format!(
                             "Unable to extract named child #{} from Node: {:?}",
                             position, n
                         ));
                         return;
                     }
-                    Some(named_child) => named_child,
                 };
 
-                if position < child_count && named_child.kind().eq("ordering") {
-                    let ordering_string = get_from_raw(&named_child, raw);
-                    let ordering = Direction::from_str(&ordering_string);
-                    match ordering {
-                        Ok(o) => {
-                            position = position + 1;
-                            let order = OrderByColumn::new(format!("\"{}\"", column), &o);
-                            query.add_explicit_order_by(&order);
-                        }
-                        Err(e) => {
-                            *query_result = Err(e.to_string());
-                            return;
-                        }
-                    };
-                } else {
-                    let ordering = Direction::Ascending; //default ordering is ASC
-                    let order = OrderByColumn::new(format!("\"{}\"", column), &ordering);
-                    query.add_explicit_order_by(&order);
+                if !named_child.kind().eq("ordering") {
+                    query.add_explicit_order_by(&default_order);
+                    return;
                 }
+
+                let ordering_string = get_from_raw(&named_child, raw);
+                let ordering = Direction::from_str(&ordering_string);
+                match ordering {
+                    Ok(o) => {
+                        position = position + 1;
+                        let order = OrderByColumn::new(format!("\"{}\"", column), &o);
+                        query.add_explicit_order_by(&order);
+                    }
+                    Err(e) => {
+                        *query_result = Err(e.to_string());
+                        return;
+                    }
+                };
             }
         }
     }
@@ -2519,12 +2624,14 @@ pub fn transduce_offset(n: &Node, raw: &str, query_result: &mut Result<Select, S
         Err(_) => return,
         Ok(query) => {
             let offset_str = match n.named_child(0) {
-                None => {
-                    *query_result =
-                        Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                Some(named_child) if !is_error(&named_child) => get_from_raw(&named_child, raw),
+                _ => {
+                    *query_result = Err(format!(
+                        "Unable to extract 0th named child from Node: {:?}",
+                        n
+                    ));
                     return;
                 }
-                Some(named_child) => get_from_raw(&named_child, raw),
             };
             let offset: usize = match offset_str.parse() {
                 Err(_) => {
@@ -2546,12 +2653,14 @@ pub fn transduce_limit(n: &Node, raw: &str, query_result: &mut Result<Select, St
         Err(_) => return,
         Ok(query) => {
             let limit_str = match n.named_child(0) {
-                None => {
-                    *query_result =
-                        Err(format!("Unable to extract 0th named child from Node: {:?}", n));
+                Some(named_child) if !is_error(&named_child) => get_from_raw(&named_child, raw),
+                _ => {
+                    *query_result = Err(format!(
+                        "Unable to extract 0th named child from Node: {:?}",
+                        n
+                    ));
                     return;
                 }
-                Some(named_child) => get_from_raw(&named_child, raw),
             };
             let limit: usize = match limit_str.parse() {
                 Err(_) => {
@@ -2689,9 +2798,10 @@ pub fn fetch_rows_as_json_from_selects(
         Err(e) => Err(e),
         Ok(query) => match block_on(query.fetch_all(pool)) {
             Err(e) => Err(format!("{}", e)),
-            Ok(rows) if rows.len() != 1 => {
-                Err(format!("In fetch_rows_as_json(), expected 1 row, got {}", rows.len()))
-            }
+            Ok(rows) if rows.len() != 1 => Err(format!(
+                "In fetch_rows_as_json(), expected 1 row, got {}",
+                rows.len()
+            )),
             Ok(mut rows) => {
                 let row = rows.pop().unwrap();
                 match row.try_get("row") {
@@ -2741,7 +2851,10 @@ pub fn bind_sql<'a, S: Into<String>>(
             final_sql.push_str(this_match);
         } else {
             // Remove the opening and closing braces from the placeholder, `{key}`:
-            let key = match this_match.strip_prefix("{").and_then(|s| s.strip_suffix("}")) {
+            let key = match this_match
+                .strip_prefix("{")
+                .and_then(|s| s.strip_suffix("}"))
+            {
                 None => return Err(format!("'{}' is not enclosed in curly braces.", this_match)),
                 Some(k) => k,
             };
@@ -2904,14 +3017,20 @@ mod tests {
     #[serial]
     fn test_real_datatype() {
         let sq_connection_options = AnyConnectOptions::from_str("sqlite://:memory:").unwrap();
-        let sqlite_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(sq_connection_options))
-                .unwrap();
+        let sqlite_pool = block_on(
+            AnyPoolOptions::new()
+                .max_connections(5)
+                .connect_with(sq_connection_options),
+        )
+        .unwrap();
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let postgresql_pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
+        let postgresql_pool = block_on(
+            AnyPoolOptions::new()
+                .max_connections(5)
+                .connect_with(pg_connection_options),
+        )
+        .unwrap();
 
         for pool in &vec![sqlite_pool, postgresql_pool] {
             let drop = r#"DROP TABLE IF EXISTS "my_table_with_reals""#;
@@ -2956,9 +3075,12 @@ mod tests {
     fn test_json_datatype() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
+        let pool = block_on(
+            AnyPoolOptions::new()
+                .max_connections(5)
+                .connect_with(pg_connection_options),
+        )
+        .unwrap();
 
         let drop = r#"DROP TABLE IF EXISTS "my_table_with_json""#;
         let create = r#"CREATE TABLE "my_table_with_json" (
@@ -3009,8 +3131,11 @@ mod tests {
         let mut rows = select.fetch_rows_as_json(&pool, &HashMap::new()).unwrap();
         assert_eq!(rows.len(), 1);
         let row = rows.pop().unwrap();
-        let fooval =
-            row.get("column_3").and_then(|c| c.as_object()).and_then(|c| c.get("fookey")).unwrap();
+        let fooval = row
+            .get("column_3")
+            .and_then(|c| c.as_object())
+            .and_then(|c| c.get("fookey"))
+            .unwrap();
         match fooval {
             SerdeValue::String(s) => assert_eq!(s, "foovalue"),
             _ => panic!("'{}' does not match 'foovalue'", fooval),
@@ -3047,16 +3172,22 @@ mod tests {
     fn test_count() {
         let select = Select::new("my_table");
         let sql = select.to_sql_count(&DbType::Sqlite).unwrap();
-        assert_eq!(sql, "SELECT COUNT(1) AS count FROM (SELECT * FROM my_table) AS t");
+        assert_eq!(
+            sql,
+            "SELECT COUNT(1) AS count FROM (SELECT * FROM my_table) AS t"
+        );
     }
 
     #[test]
     fn test_json_fetch_error() {
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
+        let pool = block_on(
+            AnyPoolOptions::new()
+                .max_connections(5)
+                .connect_with(pg_connection_options),
+        )
+        .unwrap();
 
         let select = Select::new("nonexistent_table");
         let expected_json = "{\"status\":400,\"error\":\"error returned from database: relation \
@@ -3077,9 +3208,12 @@ mod tests {
         // Setup database connections and create the needed tables:
         let pg_connection_options =
             AnyConnectOptions::from_str("postgresql:///valve_postgres").unwrap();
-        let pool =
-            block_on(AnyPoolOptions::new().max_connections(5).connect_with(pg_connection_options))
-                .unwrap();
+        let pool = block_on(
+            AnyPoolOptions::new()
+                .max_connections(5)
+                .connect_with(pg_connection_options),
+        )
+        .unwrap();
         let drop_table1 = r#"DROP TABLE IF EXISTS "my_table""#;
         let create_table1 = r#"CREATE TABLE "my_table" (
                                  "row_number" BIGINT,
@@ -3154,6 +3288,22 @@ mod tests {
     fn test_false_star() {
         // Wildcards ('*') are only allowed in LIKE clauses, so this should fail:
         let from_url = "bar?foo=eq.*yogi*";
+        parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_select() {
+        // Parentheses are not allowed in select clauses:
+        let from_url = "penguin?select=Delta 15 N (o/oo)";
+        parse(from_url).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_order_by() {
+        // Parentheses are not allowed in order by clauses:
+        let from_url = "penguin?order=Delta 15 N (o/ooo).desc";
         parse(from_url).unwrap();
     }
 }
